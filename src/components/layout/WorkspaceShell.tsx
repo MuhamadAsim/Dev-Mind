@@ -1,20 +1,57 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { Sidebar } from './Sidebar';
 import { RepositoryPanel } from './RepositoryPanel';
 import { TopBar } from './TopBar';
 import { ChatInterface } from '@/components/chat/ChatInterface';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useInitAuth } from '@/store/hooks/useAuth';
-//
+import { useSetConversations } from '@/store/hooks/useChat';
+import { Conversation } from '@/types';
+
 export function WorkspaceShell() {
   const initAuth = useInitAuth();
+  const setConversations = useSetConversations();
 
   // Mount auth state from localStorage on load
   useEffect(() => {
     initAuth();
   }, [initAuth]);
+
+  // Load conversations from MongoDB on mount
+  const loadConversations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/conversations');
+      if (!res.ok) return;
+      const data = await res.json() as {
+        conversations: Array<{
+          id: string; title: string; aiModel: string; isPinned: boolean;
+          createdAt: string; updatedAt: string; metadata: Record<string, unknown>;
+        }>
+      };
+      console.log('[LOAD CONVERSATIONS]', data);   // ← add this
+
+      const conversations: Conversation[] = data.conversations.map((c) => ({
+        id: c.id,
+        title: c.title,
+        messages: [], // messages loaded lazily on conversation select
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        model: c.aiModel,
+        tags: [],
+        isPinned: c.isPinned ?? false,
+        isSynced: true, // loaded from the DB, so it's a real conversation
+      }));
+      setConversations(conversations);
+    } catch (err) {
+      console.error('[WorkspaceShell] Failed to load conversations:', err);
+    }
+  }, [setConversations]);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
 
   // Register global keyboard shortcuts
   useKeyboardShortcuts();

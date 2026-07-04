@@ -10,11 +10,19 @@ export const useActiveConversation = () =>
       s.conversations.find((c) => c.id === s.activeConversationId) ?? null
     )
   );
+export const useSetConversations = () => useStore((s) => s.setConversations);
+export const useUpsertConversation = () => useStore((s) => s.upsertConversation);
+export const useReplaceConversationId = () => useStore((s) => s.replaceConversationId);
 export const useCreateConversation = () => useStore((s) => s.createConversation);
 export const useSetActiveConversation = () => useStore((s) => s.setActiveConversation);
 export const useAddMessage = () => useStore((s) => s.addMessage);
 export const useUpdateMessage = () => useStore((s) => s.updateMessage);
+export const useAppendToMessage = () => useStore((s) => s.appendToMessage);
 export const useDeleteConversation = () => useStore((s) => s.deleteConversation);
 export const usePinConversation = () => useStore((s) => s.pinConversation);
 export const useRenameConversation = () => useStore((s) => s.renameConversation);
 export const useClearAllConversations = () => useStore((s) => s.clearAllConversations);
+
+// ── Message-loading spinner state (per conversation) ─────────
+export const useLoadingMessageIds = () => useStore((s) => s.loadingMessageIds);
+export const useSetMessagesLoading = () => useStore((s) => s.setMessagesLoading);

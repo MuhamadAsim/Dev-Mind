@@ -40,7 +40,11 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
             border: '1px solid var(--color-accent-border)',
           }}
         >
-          <Bot size={14} style={{ color: 'var(--color-accent)' }} />
+          {/* FIX (icon invisible in dark mode): was var(--color-accent),
+              which reads as a dim indigo on the dark gradient background.
+              --color-text-primary already flips white/black with theme
+              everywhere else in this file, so reuse it here too. */}
+          <Bot size={14} style={{ color: 'var(--color-text-primary)' }} />
         </div>
       )}
 
@@ -109,6 +113,46 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
           <User size={13} style={{ color: '#fff' }} />
         </div>
       )}
+    </motion.div>
+  );
+}
+
+/* ── Thinking Bubble ──────────────────────────────────────────
+   Shown while waiting on the API response, before the assistant's
+   message even exists yet (i.e. before the 'meta' SSE event arrives
+   and a real streaming message is added to the conversation). */
+export function ThinkingBubble() {
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      className="flex gap-3 justify-start"
+    >
+      <div
+        className="flex items-center justify-center h-7 w-7 rounded-lg shrink-0 mt-1"
+        style={{
+          background: 'linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.2))',
+          border: '1px solid var(--color-accent-border)',
+        }}
+      >
+        <Bot size={14} style={{ color: 'var(--color-text-primary)' }} />
+      </div>
+
+      <div
+        className="flex items-center gap-2 rounded-2xl px-4 py-3 text-sm"
+        style={{
+          background: 'var(--color-bg-elevated)',
+          border: '1px solid var(--color-border)',
+          color: 'var(--color-text-muted)',
+          borderBottomLeftRadius: 6,
+        }}
+      >
+        <span>Thinking</span>
+        <StreamingIndicator />
+      </div>
     </motion.div>
   );
 }

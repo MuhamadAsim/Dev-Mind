@@ -25,10 +25,12 @@ export interface Conversation {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
-  /** Future: 'gpt-4o' | 'claude-3-5-sonnet' | 'gemini-pro' | etc. */
   model?: string;
   tags?: string[];
   isPinned?: boolean;
+  /** True once this conversation exists in the DB.
+   *  False = local-only draft (e.g. "New conversation" not yet sent). */
+  isSynced?: boolean;
 }
 
 export interface ChatState {

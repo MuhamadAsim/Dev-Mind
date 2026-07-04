@@ -8,51 +8,182 @@ import { EmptyState } from './EmptyState';
 import {
   useActiveConversation,
   useActiveConversationId,
-  useCreateConversation,
   useAddMessage,
+  useAppendToMessage,
+  useUpdateMessage,
+  useSetConversations,
+  useCreateConversation,
+  useReplaceConversationId,
+  useLoadingMessageIds,
 } from '@/store/hooks/useChat';
-import { generateId } from '@/lib/utils';
-import { Message } from '@/types';
+import { Conversation } from '@/types';
 
-// ── Mock AI responses ─────────────────────────────────────────
-const MOCK_RESPONSES = [
-  "Great question! Let me analyze that for you.\n\nBased on what you've described, I'd recommend breaking this down into smaller components. First, let's think about the data flow and then work our way up to the UI layer.",
-  "I can help with that! Here's my thinking:\n\n1. Start by defining your TypeScript interfaces\n2. Build the data layer first\n3. Then wire up your UI components\n\nThis approach keeps concerns separated and makes testing easier.",
-  "That's a classic architectural challenge. The key insight here is to think about **single responsibility** — each module should do one thing well.\n\nFor your use case, I'd consider using a service layer to abstract the API calls from your React components.",
-  "Interesting approach! A few things to consider:\n\n- Type safety is your friend here — don't use `any`\n- Consider error boundaries for resilience\n- Memoize expensive computations with `useMemo`\n\nWant me to elaborate on any of these points?",
-  "Here's a pattern I'd recommend for this scenario:\n\n```typescript\n// Clean, composable, and testable\nconst useFeature = () => {\n  const [state, setState] = useState(initialState);\n  // ... your logic here\n  return { state, actions };\n};\n```\n\nThis keeps your components lean and logic testable.",
-];
+// ── SSE event shapes from POST /api/chat/stream ───────────────
+type StreamMeta = { type: 'meta'; conversationId: string; assistantMessageId: string };
+type StreamChunk = { type: 'chunk'; text: string };
+type StreamDone = { type: 'done' };
+type StreamError = { type: 'error'; message: string };
+type StreamEvent = StreamMeta | StreamChunk | StreamDone | StreamError;
 
-function getMockResponse(): string {
-  return MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
+// ── Sidebar reload helper ─────────────────────────────────────
+async function fetchConversationList(): Promise<Conversation[]> {
+  const res = await fetch('/api/conversations');
+  if (!res.ok) return [];
+  const data = await res.json() as {
+    conversations: Array<{
+      id: string;
+      title: string;
+      aiModel: string;
+      isPinned: boolean;
+      createdAt: string;
+      updatedAt: string;
+      metadata: Record<string, unknown>;
+    }>;
+  };
+  return data.conversations.map((c) => ({
+    id: c.id,
+    title: c.title,
+    messages: [],
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+    model: c.aiModel,
+    tags: [],
+    isPinned: c.isPinned ?? false,
+    isSynced: true, // came from the DB, so it's real
+  }));
 }
+
+// ── Component ─────────────────────────────────────────────────
 
 export function ChatInterface() {
   const activeConversationId = useActiveConversationId();
   const activeConversation = useActiveConversation();
-  const createConversation = useCreateConversation();
+  const loadingMessageIds = useLoadingMessageIds();
   const addMessage = useAddMessage();
+  const appendToMessage = useAppendToMessage();
+  const updateMessage = useUpdateMessage();
+  const setConversations = useSetConversations();
+  const createConversation = useCreateConversation();
+  const replaceConversationId = useReplaceConversationId();
+
   const [isLoading, setIsLoading] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
   const handleSend = useCallback(
     async (content: string) => {
-      // Create conversation if none active
+      setStreamError(null);
+
+      // ── Step 1: figure out which conversation this message belongs to.
+      // "New" means: no active conversation yet, OR the active one is a
+      // local draft that Mongo doesn't know about yet.
+      const isNewConversation = !activeConversation || !activeConversation.isSynced;
+
       let convId = activeConversationId;
       if (!convId) {
-        const newConv = createConversation(content);
-        convId = newConv.id;
+        const created = createConversation(content);
+        convId = created.id;
       }
 
-      // Add user message
-      addMessage(convId, 'user', content);
-
-      // Simulate AI response with delay
+      // ── Step 2: optimistic render — BEFORE the network call.
+      // This is what kills the 2s delay: the bubble shows instantly.
+      const userMsg = addMessage(convId, 'user', content);
       setIsLoading(true);
-      await new Promise((r) => setTimeout(r, 900 + Math.random() * 600));
-      addMessage(convId, 'assistant', getMockResponse());
-      setIsLoading(false);
+
+      try {
+        const response = await fetch('/api/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            // Only pass an id the server already recognizes.
+            // For a fresh local draft, tell the server to create a new one.
+            conversationId: isNewConversation ? null : convId,
+            message: content,
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`Server responded with ${response.status}`);
+        }
+
+        // NOTE: isLoading stays true here — do NOT clear it yet.
+        // Clearing it now (right after headers arrive) leaves a gap where
+        // isLoading is false but the assistant message doesn't exist yet
+        // (it's only added once the 'meta' SSE event is parsed below).
+        // That gap is where the "thinking" bubble was invisibly vanishing.
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let localMsgId: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const raw = line.slice('data: '.length).trim();
+            if (!raw) continue;
+
+            let event: StreamEvent;
+            try { event = JSON.parse(raw) as StreamEvent; }
+            catch { continue; }
+
+            if (event.type === 'meta') {
+              // Server confirmed the real DB id. If we were on a local
+              // draft, rename it in place — do NOT create a new entry.
+              if (isNewConversation && convId !== event.conversationId) {
+                replaceConversationId(convId, event.conversationId);
+              }
+              convId = event.conversationId;
+
+              const added = addMessage(convId, 'assistant', '');
+              localMsgId = added.id;
+              updateMessage(convId, added.id, { isStreaming: true, status: 'sending' });
+              // Only now does the real streaming bubble exist — safe to
+              // drop the thinking indicator without a visual gap.
+              setIsLoading(false);
+
+            } else if (event.type === 'chunk' && localMsgId) {
+              appendToMessage(convId, localMsgId, event.text);
+
+            } else if (event.type === 'done' && localMsgId) {
+              updateMessage(convId, localMsgId, { isStreaming: false, status: 'sent' });
+              fetchConversationList().then(setConversations).catch(console.error);
+
+            } else if (event.type === 'error') {
+              setStreamError(event.message);
+              if (localMsgId) {
+                updateMessage(convId, localMsgId, {
+                  isStreaming: false,
+                  status: 'error',
+                  content: '⚠ Something went wrong. Please try again.',
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[ChatInterface] Stream error:', err);
+        setStreamError('Failed to reach the AI service. Check your API key and try again.');
+        updateMessage(convId, userMsg.id, { status: 'error' });
+        setIsLoading(false);
+      }
     },
-    [activeConversationId, createConversation, addMessage]
+    [
+      activeConversationId,
+      activeConversation,
+      addMessage,
+      appendToMessage,
+      updateMessage,
+      setConversations,
+      createConversation,
+      replaceConversationId,
+    ]
   );
 
   const handleSelectPrompt = useCallback(
@@ -62,20 +193,11 @@ export function ChatInterface() {
 
   const messages = activeConversation?.messages ?? [];
   const hasMessages = messages.length > 0;
-
-  // Build messages list including the loading indicator
-  const displayMessages: Message[] = isLoading
-    ? [
-        ...messages,
-        {
-          id: 'streaming-indicator',
-          role: 'assistant',
-          content: '',
-          createdAt: new Date().toISOString(),
-          isStreaming: true,
-        },
-      ]
-    : messages;
+  // True while Sidebar is lazy-loading this conversation's messages —
+  // distinct from "genuinely has zero messages," so we don't flash the
+  // landing page before the real content arrives.
+  const isSwitchingConversation =
+    !!activeConversationId && loadingMessageIds.has(activeConversationId);
 
   return (
     <div
@@ -83,9 +205,44 @@ export function ChatInterface() {
       className="flex flex-col h-full"
       style={{ background: 'var(--color-bg-base)' }}
     >
-      {/* Messages or empty state */}
-      <AnimatePresence mode="wait">
-        {hasMessages ? (
+      <AnimatePresence>
+        {streamError && (
+          <motion.div
+            key="error-banner"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mx-4 mt-3 px-4 py-2.5 rounded-xl text-sm cursor-pointer"
+            onClick={() => setStreamError(null)}
+            style={{
+              background: 'rgba(239,68,68,0.12)',
+              border: '1px solid rgba(239,68,68,0.3)',
+              color: '#f87171',
+            }}
+          >
+            ⚠ {streamError}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence initial={false}>
+        {isSwitchingConversation ? (
+          <motion.div
+            key="switching"
+            className="flex-1 min-h-0 flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <div
+              className="h-5 w-5 rounded-full border-2 animate-spin"
+              style={{
+                borderColor: 'var(--color-border)',
+                borderTopColor: 'var(--color-accent)',
+              }}
+            />
+          </motion.div>
+        ) : hasMessages ? (
           <motion.div
             key="messages"
             className="flex-1 min-h-0 flex flex-col"
@@ -93,7 +250,7 @@ export function ChatInterface() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <MessageList messages={displayMessages} />
+            <MessageList messages={messages} isLoading={isLoading} />
           </motion.div>
         ) : (
           <motion.div
@@ -108,7 +265,6 @@ export function ChatInterface() {
         )}
       </AnimatePresence>
 
-      {/* Input bar */}
       <ChatInput onSend={handleSend} isLoading={isLoading} />
     </div>
   );

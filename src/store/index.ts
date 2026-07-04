@@ -20,13 +20,11 @@ export const useStore = create<RootStore>()(
       }),
       {
         name: 'devmind-store',
-        // Only persist UI preferences and conversations — not loading states
+        // Only persist UI preferences — conversations now live in MongoDB
         partialize: (s) => ({
           theme: s.theme,
           isSidebarOpen: s.isSidebarOpen,
           isRepoPanelOpen: s.isRepoPanelOpen,
-          conversations: s.conversations,
-          activeConversationId: s.activeConversationId,
         }),
       }
     ),

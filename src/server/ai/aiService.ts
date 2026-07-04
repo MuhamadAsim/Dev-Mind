@@ -1,0 +1,82 @@
+// ============================================================
+// AI Service
+// Single entry-point for all AI operations.
+// Business logic (system prompt, message formatting) lives here.
+// Provider selection and initialization also happens here.
+// API routes call streamChat() — they never touch a provider directly.
+// ============================================================
+import type { AIMessage, AIProvider } from './types';
+import { createOpenRouterProvider } from './providers/openrouter';
+
+// ── System Prompt ─────────────────────────────────────────────
+const SYSTEM_PROMPT = `You are DevMind AI, a personal AI software engineering assistant.
+You help developers write, understand, debug, review, and improve code.
+You are precise, concise, and technically accurate.
+When writing code, always use proper syntax highlighting with fenced code blocks.
+When you are unsure, say so rather than guessing.`;
+
+// ── Default model ─────────────────────────────────────────────
+// Configurable via environment variable — no hardcoded model IDs
+// in business logic. Change DEFAULT_AI_MODEL in .env.local to switch.
+const DEFAULT_MODEL = process.env.DEFAULT_AI_MODEL ?? 'openai/gpt-4o-mini';
+
+// ── Provider initialization ───────────────────────────────────
+// To add a new provider (e.g. Anthropic, Gemini, Ollama):
+//   1. Create src/server/ai/providers/<name>.ts implementing AIProvider
+//   2. Add a case below
+//   3. Set ACTIVE_AI_PROVIDER env var
+function createProvider(): AIProvider {
+  const provider = process.env.ACTIVE_AI_PROVIDER ?? 'openrouter';
+
+  switch (provider) {
+    case 'openrouter':
+      return createOpenRouterProvider({
+        apiKey: process.env.OPENROUTER_API_KEY ?? '',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        defaultModel: DEFAULT_MODEL,
+      });
+
+    // Future providers:
+    // case 'openai':
+    //   return createOpenAIProvider({ apiKey: process.env.OPENAI_API_KEY ?? '' });
+    // case 'anthropic':
+    //   return createAnthropicProvider({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' });
+    // case 'gemini':
+    //   return createGeminiProvider({ apiKey: process.env.GOOGLE_API_KEY ?? '' });
+
+    default:
+      throw new Error(`Unknown AI provider: "${provider}". Set ACTIVE_AI_PROVIDER in .env.local.`);
+  }
+}
+
+// Singleton — provider is constructed once per server process
+let _provider: AIProvider | null = null;
+function getProvider(): AIProvider {
+  if (!_provider) _provider = createProvider();
+  return _provider;
+}
+
+// ── Public API ────────────────────────────────────────────────
+
+export interface StreamChatOptions {
+  /** Full conversation history including the latest user message */
+  messages: AIMessage[];
+  /** Override the default model for this request */
+  model?: string;
+}
+
+/**
+ * Stream a chat response.
+ * @returns A ReadableStream of text chunks suitable for SSE streaming.
+ */
+export async function streamChat(options: StreamChatOptions): Promise<ReadableStream<string>> {
+  const { messages, model = DEFAULT_MODEL } = options;
+
+  // Prepend system prompt — invisible to the user but shapes AI behavior
+  // Pass the system prompt separately as instructions.
+  // Newer AI SDK versions don't allow system messages in `messages`.
+  return getProvider().stream(messages, model, SYSTEM_PROMPT);
+}
+
+/** Expose the resolved default model (useful for displaying in the UI) */
+export { DEFAULT_MODEL };

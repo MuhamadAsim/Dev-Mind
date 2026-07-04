@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   Bot,
   MoreHorizontal,
+  Loader2,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -24,14 +25,19 @@ import {
   useCreateConversation,
   useDeleteConversation,
   usePinConversation,
+  useSetConversations,
+  useSetMessagesLoading,
 } from '@/store/hooks/useChat';
 import { useToggleSidebar } from '@/store/hooks/useUI';
 import { formatDate, truncate } from '@/lib/utils';
-import { Conversation } from '@/types';
+import { Conversation, Message } from '@/types';
 
 const SIDEBAR_W = 260;
 
 // Hardcoded palettes — bypasses CSS variables entirely, switched manually by resolvedTheme
+// NOTE: this is duplicated in TopBar.tsx almost verbatim. Worth extracting into
+// a shared lib/palettes.ts once the current bugs are settled — flagging it,
+// not fixing it now since it's out of scope for this pass.
 const PALETTES = {
   dark: {
     bgSurface: '#161b27',
@@ -77,14 +83,107 @@ export function Sidebar() {
   const activeId = useActiveConversationId();
   const setActive = useSetActiveConversation();
   const createConversation = useCreateConversation();
-  const deleteConversation = useDeleteConversation();
-  const pinConversation = usePinConversation();
+  const deleteConversationLocal = useDeleteConversation();
+  const pinConversationLocal = usePinConversation();
+  const setConversations = useSetConversations();
+  const setMessagesLoading = useSetMessagesLoading();
+
+  // FIX (delete feedback): tracks ids currently being deleted so we can
+  // show a spinner + block interaction instead of the UI looking frozen
+  // while the DELETE request is in flight.
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   const pinned = conversations.filter((c) => c.isPinned);
   const recent = conversations.filter((c) => !c.isPinned);
 
   const handleNewChat = () => {
+    // If we're already sitting on an empty, unsent draft, don't spawn
+    // another one — this is what caused "keeps popping new conversations."
+    const current = conversations.find((c) => c.id === activeId);
+    if (current && !current.isSynced && current.messages.length === 0) {
+      return;
+    }
     createConversation();
+  };
+
+  /** Select a conversation and lazy-load its messages from the API */
+  const handleSelectConversation = async (id: string) => {
+    setActive(id);
+    // Skip fetch if messages are already loaded in Zustand
+    const conv = conversations.find((c) => c.id === id);
+    if (conv && conv.messages.length > 0) return;
+    setMessagesLoading(id, true);
+    try {
+      const res = await fetch(`/api/conversations/${id}/messages`);
+      if (!res.ok) return;
+      const data = await res.json() as {
+        messages: Array<{
+          id: string; role: string; content: string;
+          type: string; status: string; createdAt: string;
+          metadata: Record<string, unknown>;
+        }>;
+      };
+      // Patch the messages into the existing Zustand conversation entry,
+      // preserving real server-side message IDs.
+      const loaded: Message[] = data.messages.map((m) => ({
+        id: m.id,
+        role: m.role as Message['role'],
+        content: m.content,
+        createdAt: m.createdAt,
+        isStreaming: false,
+        status: m.status as Message['status'],
+        metadata: m.metadata,
+      }));
+      setConversations(
+        conversations.map((c) =>
+          c.id === id ? { ...c, messages: loaded } : c
+        )
+      );
+    } catch (err) {
+      console.error('[Sidebar] Failed to load messages:', err);
+    } finally {
+      setMessagesLoading(id, false);
+    }
+  };
+
+  /** Delete from API then remove from local Zustand state */
+  const handleDelete = async (id: string) => {
+    // Guard: ignore a second click while this delete is already running.
+    if (deletingIds.has(id)) return;
+
+    setDeletingIds((prev) => new Set(prev).add(id));
+    try {
+      await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error('[Sidebar] Delete failed:', err);
+    } finally {
+      deleteConversationLocal(id);
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Pin/unpin a conversation. Updates local state optimistically, then
+   * persists to Mongo via PATCH. Reverts on failure so the UI never lies
+   * about what's actually saved.
+   */
+  const handlePin = async (id: string, pinned: boolean) => {
+    pinConversationLocal(id, pinned);
+    try {
+      const res = await fetch(`/api/conversations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPinned: pinned }),
+      });
+      if (!res.ok) throw new Error('Pin request failed');
+    } catch (err) {
+      console.error('[Sidebar] Pin failed, reverting:', err);
+      pinConversationLocal(id, !pinned);
+    }
   };
 
   return (
@@ -177,49 +276,59 @@ export function Sidebar() {
           </div>
 
           {/* Conversation list */}
-          <ScrollArea className="flex-1 px-2 py-1">
+          {/* FIX (not scrollable): a flex child's default min-height is
+              "auto", which means it refuses to shrink below its content
+              size — so this list was pushing past the container instead
+              of scrolling internally. min-h-0 overrides that. */}
+          <ScrollArea className="flex-1 min-h-0 px-2 py-1">
             <AnimatePresence initial={false}>
-              {pinned.length > 0 && (
-                <ConversationGroup
-                  label="Pinned"
-                  items={pinned}
-                  activeId={activeId}
-                  onSelect={setActive}
-                  onDelete={deleteConversation}
-                  onPin={pinConversation}
-                  colors={COLORS}
-                />
-              )}
-              {recent.length > 0 && (
-                <ConversationGroup
-                  label={pinned.length > 0 ? 'Recent' : undefined}
-                  items={recent}
-                  activeId={activeId}
-                  onSelect={setActive}
-                  onDelete={deleteConversation}
-                  onPin={pinConversation}
-                  colors={COLORS}
-                />
-              )}
-              {conversations.length === 0 && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="flex flex-col items-center justify-center gap-3 py-12 text-center"
-                >
-                  <div
-                    className="flex items-center justify-center h-10 w-10 rounded-xl"
-                    style={{ background: COLORS.accentMuted }}
+                {pinned.length > 0 && (
+                  <ConversationGroup
+                    key="pinned-group"
+                    label="Pinned"
+                    items={pinned}
+                    activeId={activeId}
+                    deletingIds={deletingIds}
+                    onSelect={handleSelectConversation}
+                    onDelete={handleDelete}
+                    onPin={handlePin}
+                    colors={COLORS}
+                  />
+                )}
+                {recent.length > 0 && (
+                  <ConversationGroup
+                    key="recent-group"
+                    label={pinned.length > 0 ? 'Recent' : undefined}
+                    items={recent}
+                    activeId={activeId}
+                    deletingIds={deletingIds}
+                    onSelect={handleSelectConversation}
+                    onDelete={handleDelete}
+                    onPin={handlePin}
+                    colors={COLORS}
+                  />
+                )}
+                {conversations.length === 0 && (
+                  <motion.div
+                    key="empty-state"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex flex-col items-center justify-center gap-3 py-12 text-center"
                   >
-                    <Bot size={18} style={{ color: COLORS.accent }} />
-                  </div>
-                  <p className="text-xs" style={{ color: COLORS.textMuted }}>
-                    No conversations yet.
-                    <br />
-                    Start a new chat above.
-                  </p>
-                </motion.div>
-              )}
+                    <div
+                      className="flex items-center justify-center h-10 w-10 rounded-xl"
+                      style={{ background: COLORS.accentMuted }}
+                    >
+                      <Bot size={18} style={{ color: COLORS.accent }} />
+                    </div>
+                    <p className="text-xs" style={{ color: COLORS.textMuted }}>
+                      No conversations yet.
+                      <br />
+                      Start a new chat above.
+                    </p>
+                  </motion.div>
+                )}
             </AnimatePresence>
           </ScrollArea>
 
@@ -241,15 +350,16 @@ interface GroupProps {
   label?: string;
   items: Conversation[];
   activeId: string | null;
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-  onPin: (id: string, pinned: boolean) => void;
+  deletingIds: Set<string>;
+  onSelect: (id: string) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
+  onPin: (id: string, pinned: boolean) => void | Promise<void>;
   colors: typeof PALETTES.dark;
 }
 
-function ConversationGroup({ label, items, activeId, onSelect, onDelete, onPin, colors }: GroupProps) {
+function ConversationGroup({ label, items, activeId, deletingIds, onSelect, onDelete, onPin, colors }: GroupProps) {
   return (
-    <div className="mb-3">
+    <motion.div className="mb-3">
       {label && (
         <p
           className="px-2 py-1 text-[10px] font-semibold uppercase tracking-widest"
@@ -259,11 +369,12 @@ function ConversationGroup({ label, items, activeId, onSelect, onDelete, onPin, 
         </p>
       )}
       <div className="space-y-0.5">
-        {items.map((conv) => (
+        {items.map((conv, idx) => (
           <ConversationItem
-            key={conv.id}
+            key={conv.id || `fallback-${idx}`}
             conversation={conv}
             isActive={conv.id === activeId}
+            isDeleting={deletingIds.has(conv.id)}
             onSelect={onSelect}
             onDelete={onDelete}
             onPin={onPin}
@@ -271,7 +382,7 @@ function ConversationGroup({ label, items, activeId, onSelect, onDelete, onPin, 
           />
         ))}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -279,30 +390,32 @@ function ConversationGroup({ label, items, activeId, onSelect, onDelete, onPin, 
 interface ItemProps {
   conversation: Conversation;
   isActive: boolean;
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-  onPin: (id: string, pinned: boolean) => void;
+  isDeleting: boolean;
+  onSelect: (id: string) => void | Promise<void>;
+  onDelete: (id: string) => void | Promise<void>;
+  onPin: (id: string, pinned: boolean) => void | Promise<void>;
   colors: typeof PALETTES.dark;
 }
 
-function ConversationItem({ conversation, isActive, onSelect, onDelete, onPin, colors }: ItemProps) {
+function ConversationItem({ conversation, isActive, isDeleting, onSelect, onDelete, onPin, colors }: ItemProps) {
   return (
     <motion.div
-      layout
       initial={{ opacity: 0, x: -8 }}
-      animate={{ opacity: 1, x: 0 }}
+      animate={{ opacity: isDeleting ? 0.5 : 1, x: 0 }}
       exit={{ opacity: 0, x: -8 }}
       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-      className="group relative flex items-center gap-2 rounded-lg px-2.5 py-2 cursor-pointer"
+      className="group relative flex items-center gap-2 rounded-lg px-2.5 py-2"
       style={{
         background: isActive ? colors.bgActive : 'transparent',
         border: isActive ? `1px solid ${colors.accentBorder}` : '1px solid transparent',
+        cursor: isDeleting ? 'not-allowed' : 'pointer',
+        pointerEvents: isDeleting ? 'none' : 'auto',
       }}
-      onClick={() => onSelect(conversation.id)}
-      whileHover={{
+      onClick={() => !isDeleting && onSelect(conversation.id)}
+      whileHover={!isDeleting ? {
         background: isActive ? colors.bgActive : colors.bgHover,
         borderColor: isActive ? colors.accentBorder : colors.border,
-      }}
+      } : {}}
     >
       <div className="flex-1 min-w-0">
         <p
@@ -312,26 +425,31 @@ function ConversationItem({ conversation, isActive, onSelect, onDelete, onPin, c
           {truncate(conversation.title, 28)}
         </p>
         <p className="text-[10px] mt-0.5" style={{ color: colors.textMuted }}>
-          {formatDate(conversation.updatedAt)}
+          {isDeleting ? 'Deleting…' : formatDate(conversation.updatedAt)}
         </p>
       </div>
 
-      {/* Action buttons on hover */}
-      <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-        <ActionBtn
-          label={conversation.isPinned ? 'Unpin' : 'Pin'}
-          onClick={(e) => { e.stopPropagation(); onPin(conversation.id, !conversation.isPinned); }}
-          icon={<Pin size={11} />}
-          colors={colors}
-        />
-        <ActionBtn
-          label="Delete"
-          onClick={(e) => { e.stopPropagation(); onDelete(conversation.id); }}
-          icon={<Trash2 size={11} />}
-          danger
-          colors={colors}
-        />
-      </div>
+      {isDeleting ? (
+        // Visible proof-of-work while the DELETE request is in flight —
+        // this is what was missing before.
+        <Loader2 size={12} className="animate-spin shrink-0" style={{ color: colors.textMuted }} />
+      ) : (
+        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <ActionBtn
+            label={conversation.isPinned ? 'Unpin' : 'Pin'}
+            onClick={(e) => { e.stopPropagation(); onPin(conversation.id, !conversation.isPinned); }}
+            icon={<Pin size={11} />}
+            colors={colors}
+          />
+          <ActionBtn
+            label="Delete"
+            onClick={(e) => { e.stopPropagation(); onDelete(conversation.id); }}
+            icon={<Trash2 size={11} />}
+            danger
+            colors={colors}
+          />
+        </div>
+      )}
     </motion.div>
   );
 }

@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer |
-| **Phase** | Frontend MVP — UI shell only, no real AI/backend yet |
+| **Phase** | Phase 2 — Real AI + Persistent Storage |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -33,6 +33,10 @@
 | Route Protection | Next.js Middleware | built-in | Cookie-based (`devmind_session`) |
 | Page Transitions | View Transitions API | experimental | `viewTransition: true` in `next.config.ts` |
 | Fonts | Geist / Geist Mono | via next/font | Zero-layout-shift font loading |
+| AI SDK | Vercel AI SDK (`ai`) | latest | Server-side `streamText` only |
+| AI Provider | `@ai-sdk/openai` | latest | OpenAI-compatible — pointed at OpenRouter |
+| Database | MongoDB | Atlas or local | Via Mongoose ODM |
+| ODM | Mongoose | latest | Two collections: Conversation + Message |
 
 ---
 
@@ -41,10 +45,17 @@
 ### 1. Route Groups
 ```
 src/app/
-├── (auth)/login/         → /login  (no shared layout, full-screen bg)
-├── (workspace)/workspace/ → /workspace (3-panel shell)
-├── layout.tsx             → Root layout (fonts, ThemeProvider, TooltipProvider)
-└── page.tsx               → Server Component redirect (/ → /login or /workspace)
+├── (auth)/login/              → /login  (no shared layout, full-screen bg)
+├── (workspace)/workspace/     → /workspace (3-panel shell)
+├── api/
+│   ├── chat/stream/           → POST  (SSE streaming endpoint)
+│   └── conversations/
+│       ├── route.ts           → GET   (list all)
+│       └── [id]/
+│           ├── route.ts       → GET / PATCH / DELETE
+│           └── messages/route.ts → GET (lazy-load messages)
+├── layout.tsx                 → Root layout (fonts, ThemeProvider, TooltipProvider)
+└── page.tsx                   → Server Component redirect (/ → /login or /workspace)
 ```
 
 ### 2. Authentication (Mock — Replace Later)
@@ -61,7 +72,7 @@ src/store/
 ├── slices/
 │   ├── authSlice.ts            ← user, isAuthenticated, isLoading, login, logout, initAuth
 │   ├── uiSlice.ts              ← theme, isSidebarOpen, isRepoPanelOpen, widths, commandPalette
-│   └── chatSlice.ts            ← conversations, activeConversationId, CRUD actions
+│   └── chatSlice.ts            ← conversations, activeConversationId, CRUD + streaming actions
 └── hooks/
     ├── useAuth.ts              ← Auth selector hooks (ONLY import from here, not useStore)
     ├── useUI.ts                ← UI selector hooks
@@ -70,13 +81,16 @@ src/store/
 
 **Rule**: Components **never** import `useStore` directly. Always use domain hooks.
 
-**Persist config** (Zustand persist middleware): Only `theme`, `isSidebarOpen`, `isRepoPanelOpen`, `conversations`, `activeConversationId` are persisted.
+**Persist config** (Zustand persist middleware): Only `theme`, `isSidebarOpen`, `isRepoPanelOpen` are persisted.  
+**Conversations are NOT persisted to localStorage** — MongoDB is the source of truth. Zustand is a session-time cache.
 
 ### 4. Client/Server Component Split
 - `app/**/page.tsx` → Server Components (metadata, redirects)
 - `app/layout.tsx` → Server Component (fonts, providers)
+- `app/api/**` → Next.js Route Handlers (server-side, Node.js runtime)
 - All interactive UI → `'use client'` (sidebar, chat, animations)
 - **Never** access `localStorage` or `document` in Server Components
+- **All Mongoose/AI code is server-only** — lives in `src/server/`
 
 ### 5. Animation Strategy
 | Use Case | Tool |
@@ -92,6 +106,50 @@ src/store/
 - shadcn CSS variables bridged to our tokens under `:root {}`
 - Light mode overrides under `.light {}` class
 
+### 7. AI Provider Architecture
+```
+API Route  →  aiService.ts  →  AIProvider interface  →  OpenRouter provider
+```
+- **`src/server/ai/types.ts`**: `AIMessage` and `AIProvider` interface. Every provider implements this.
+- **`src/server/ai/aiService.ts`**: Single entry-point. Builds system prompt, selects provider, exposes `streamChat()`.
+- **`src/server/ai/providers/openrouter.ts`**: OpenRouter implementation using `@ai-sdk/openai` pointed at `https://openrouter.ai/api/v1`.
+- **To add a new provider**: Create `src/server/ai/providers/<name>.ts`, add a `case` in `aiService.ts`, set `ACTIVE_AI_PROVIDER` env var.
+- The Vercel AI SDK `useChat` hook is **intentionally not used** — Zustand manages all state.
+
+### 8. Database Architecture (Phase 2)
+Two separate MongoDB collections:
+
+| Collection | Purpose |
+|---|---|
+| `conversations` | Conversation metadata only (title, aiModel, timestamps, metadata) |
+| `messages` | All messages with `conversationId` foreign key |
+
+**Why separate collections (not embedded)?**
+- Efficient pagination for large conversations
+- Independent indexing on `role`, `type`, `createdAt`
+- Granular message updates without rewriting the whole document
+- Ready for future tool-call results, RAG citations, MCP outputs
+- Scales to thousands of messages per conversation
+
+### 9. Streaming Architecture
+```
+Client POST /api/chat/stream
+  → API creates/verifies conversation in DB
+  → API saves user message to DB
+  → API creates placeholder assistant message (status: 'sending')
+  → API calls aiService.streamChat()
+  → API streams SSE events back:
+      data: {"type":"meta","conversationId":"...","assistantMessageId":"..."}
+      data: {"type":"chunk","text":"Hello"}
+      data: {"type":"chunk","text":" world"}
+      data: {"type":"done"}
+  → After stream ends: API updates assistant message content in DB
+Client reads stream:
+  → meta  → upsertConversation (if new), add streaming placeholder
+  → chunk → appendToMessage() (live text update in Zustand)
+  → done  → mark isStreaming:false, reload conversation list from API
+```
+
 ---
 
 ## Folder Structure
@@ -101,19 +159,41 @@ src/
 ├── app/
 │   ├── (auth)/login/page.tsx            # /login — Login page
 │   ├── (workspace)/workspace/page.tsx   # /workspace — Workspace page
+│   ├── api/
+│   │   ├── chat/stream/route.ts         # POST — SSE streaming AI chat
+│   │   └── conversations/
+│   │       ├── route.ts                 # GET  — list all conversations
+│   │       └── [id]/
+│   │           ├── route.ts             # GET/PATCH/DELETE — single conversation
+│   │           └── messages/route.ts    # GET — messages for a conversation
 │   ├── layout.tsx                       # Root layout
 │   ├── page.tsx                         # Root redirect (server component)
 │   └── globals.css                      # Tailwind v4 @theme + design system
 │
+├── server/                              # ← NEW: server-only code (never imported by client)
+│   ├── ai/
+│   │   ├── types.ts                     # AIMessage, AIProvider, AIProviderConfig interfaces
+│   │   ├── aiService.ts                 # streamChat() — single AI entry-point
+│   │   └── providers/
+│   │       └── openrouter.ts            # OpenRouter provider (add more providers here)
+│   └── db/
+│       ├── mongoose.ts                  # Connection singleton with global cache
+│       ├── conversationService.ts       # All conversation DB operations
+│       ├── messageService.ts            # All message DB operations
+│       └── models/
+│           ├── Conversation.ts          # Mongoose schema — metadata only
+│           ├── Message.ts               # Mongoose schema — separate collection
+│           └── index.ts                 # Barrel export
+│
 ├── components/
 │   ├── ui/                              # shadcn/ui — DO NOT hand-edit
 │   ├── layout/
-│   │   ├── WorkspaceShell.tsx           # 3-panel layout + auth init + keyboard shortcuts
-│   │   ├── Sidebar.tsx                  # Left panel: conversations, search, user
+│   │   ├── WorkspaceShell.tsx           # 3-panel layout + auth init + conversation load
+│   │   ├── Sidebar.tsx                  # Left panel: API-backed delete, lazy message load
 │   │   ├── RepositoryPanel.tsx          # Right panel: mock files, branches, PRs
 │   │   └── TopBar.tsx                   # Header: sidebar toggle, model, theme, repo toggle
 │   ├── chat/
-│   │   ├── ChatInterface.tsx            # Chat orchestrator (mock AI response logic here)
+│   │   ├── ChatInterface.tsx            # Real SSE streaming — no mock logic
 │   │   ├── MessageList.tsx              # Scrollable message feed with auto-scroll
 │   │   ├── MessageBubble.tsx            # User + assistant message variants
 │   │   ├── ChatInput.tsx                # Auto-resize textarea + send button
@@ -127,7 +207,7 @@ src/
 │       └── AnimatedBackground.tsx       # Canvas mesh gradient (login page)
 │
 ├── store/
-│   ├── index.ts                         # Root store
+│   ├── index.ts                         # Root store (conversations NOT persisted)
 │   ├── slices/                          # authSlice, uiSlice, chatSlice
 │   └── hooks/                           # useAuth, useUI, useChat
 │
@@ -160,37 +240,149 @@ interface MockUser {
   email: string;
   avatarUrl: string;
   role: 'developer' | 'admin';
-  githubUsername: string | null; // null until real OAuth
+  githubUsername: string | null;
   createdAt: string;
   preferences: UserPreferences;
 }
 ```
 
-### `Message` (types/chat.ts)
+### `Message` (types/chat.ts) — Zustand client shape
 ```typescript
 interface Message {
-  id: string;
+  id: string;                           // MongoDB ObjectId string
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
-  isStreaming?: boolean; // for future streaming
+  isStreaming?: boolean;                 // true while streaming
   status?: 'sending' | 'sent' | 'error';
   metadata?: Record<string, unknown>;
 }
 ```
 
-### `Conversation` (types/chat.ts)
+### `Conversation` (types/chat.ts) — Zustand client shape
 ```typescript
 interface Conversation {
-  id: string;
+  id: string;                           // MongoDB ObjectId string
   title: string;
-  messages: Message[];
+  messages: Message[];                  // lazy-loaded on selection
   createdAt: string;
   updatedAt: string;
-  model?: string; // future multi-model support
+  model?: string;                       // aiModel from DB
   tags?: string[];
   isPinned?: boolean;
 }
+```
+
+### `IConversation` (server/db/models/Conversation.ts) — Mongoose schema
+```typescript
+{
+  title: string;
+  aiModel: string;           // 'openai/gpt-4o-mini' etc.
+  metadata: Record<string, unknown>;  // extensible: repo, RAG, MCP, agent
+  createdAt: Date;           // auto-managed by timestamps: true
+  updatedAt: Date;           // auto-managed by timestamps: true
+}
+```
+> Note: Field is `aiModel` (not `model`) to avoid conflict with Mongoose Document's `model()` method.
+
+### `IMessage` (server/db/models/Message.ts) — Mongoose schema
+```typescript
+{
+  conversationId: ObjectId;  // ref: 'Conversation'
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  type: 'text' | 'tool_call' | 'tool_result' | 'image' | 'code';  // extensible
+  status: 'sending' | 'sent' | 'error';
+  metadata: Record<string, unknown>;  // RAG citations, tool args, token usage, etc.
+  createdAt: Date;           // auto-managed, no updatedAt (messages are immutable)
+}
+```
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/chat/stream` | Stream AI response (SSE). Body: `{ conversationId?, message, model? }` |
+| `GET` | `/api/conversations` | List all conversations (summary, no messages) |
+| `GET` | `/api/conversations/[id]` | Get single conversation metadata |
+| `PATCH` | `/api/conversations/[id]` | Rename conversation. Body: `{ title }` |
+| `DELETE` | `/api/conversations/[id]` | Delete conversation + all its messages |
+| `GET` | `/api/conversations/[id]/messages` | Get all messages for a conversation |
+
+---
+
+## Environment Variables
+
+```bash
+# .env.local (never commit — covered by .gitignore)
+
+# AI Provider
+OPENROUTER_API_KEY=sk-or-v1-...           # Required — get from openrouter.ai/keys
+DEFAULT_AI_MODEL=openai/gpt-4o-mini       # Default model — any OpenRouter model string
+ACTIVE_AI_PROVIDER=openrouter             # Optional — 'openrouter' (default), future: 'openai' | 'anthropic'
+
+# Database
+MONGODB_URI=mongodb://localhost:27017/devmind  # or Atlas connection string
+
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000  # Used in OpenRouter request headers
+```
+
+`.env.example` is committed as a safe template. Copy it to `.env.local` and fill in real values.
+
+---
+
+## How to Add a New AI Provider
+
+1. Create `src/server/ai/providers/<name>.ts` implementing `AIProvider`:
+   ```typescript
+   export function createMyProvider(config: AIProviderConfig): AIProvider {
+     return {
+       async stream(messages, model): Promise<ReadableStream<string>> { ... }
+     };
+   }
+   ```
+2. Add a `case '<name>':` in the `createProvider()` switch in `src/server/ai/aiService.ts`
+3. Set `ACTIVE_AI_PROVIDER=<name>` in `.env.local`
+4. No other files need to change
+
+---
+
+## How to Switch the Default Model
+
+Set `DEFAULT_AI_MODEL` in `.env.local`. Any model available on OpenRouter works:
+```
+DEFAULT_AI_MODEL=anthropic/claude-3-5-sonnet    # strong reasoning
+DEFAULT_AI_MODEL=google/gemini-flash-1.5        # fast + cheap
+DEFAULT_AI_MODEL=openai/gpt-4o                  # most capable GPT
+DEFAULT_AI_MODEL=openai/gpt-4o-mini             # default (cheap + fast)
+```
+
+---
+
+## Chat Persistence Flow
+
+```
+User sends message
+  1. Frontend → POST /api/chat/stream { conversationId, message }
+  2. API: create conversation in DB if conversationId is null
+  3. API: save user message to DB (messages collection)
+  4. API: create placeholder assistant message (status: 'sending')
+  5. API: load full message history → pass to aiService.streamChat()
+  6. API: stream SSE back to client
+  7. After stream ends: API updates assistant message content + status in DB
+
+User loads existing conversation
+  1. WorkspaceShell mounts → GET /api/conversations → setConversations()
+  2. User clicks conversation in sidebar → GET /api/conversations/[id]/messages
+  3. Messages patched into Zustand with real server IDs (messages preserved)
+
+User deletes conversation
+  1. Sidebar → DELETE /api/conversations/[id]
+  2. API: deleteMessagesByConversation() then deleteConversation()
+  3. Frontend: optimistic local delete from Zustand
 ```
 
 ---
@@ -221,49 +413,58 @@ interface Conversation {
 
 ---
 
-## Features Implemented (MVP)
+## Features Implemented
 
-- [x] Next.js 15 App Router project scaffold
+### Phase 1 — Frontend MVP
+- [x] Next.js App Router scaffold
 - [x] Tailwind CSS v4 CSS-first design system
-- [x] shadcn/ui integration (button, tooltip, dropdown, avatar, scroll-area, badge, separator)
+- [x] shadcn/ui integration
 - [x] Zustand store with auth/ui/chat slices + selector hooks
-- [x] TypeScript types for User, Chat, UI
 - [x] Mock auth: localStorage + session cookie, survives refresh
-- [x] Route protection middleware (`devmind_session` cookie)
-- [x] Root `/` redirect based on session
+- [x] Route protection middleware
 - [x] Login page with animated canvas background
-- [x] Premium LoginCard with shimmer button + loading state
-- [x] Dark/light theme toggle (next-themes, zero flash)
+- [x] Dark/light theme toggle (zero flash)
 - [x] 3-panel workspace layout (TopBar + Sidebar + Chat + RepoPanel)
-- [x] Left sidebar: collapsible (Framer Motion), conversation list, pin/delete, new chat, search
-- [x] Right repo panel: collapsible, mock file/branch/PR placeholders
-- [x] TopBar: model selector, sidebar/panel toggles, settings
-- [x] Chat interface: empty state with suggestion grid
+- [x] Collapsible sidebar with conversation list, pin/delete, new chat, search
+- [x] Chat interface: empty state, suggestion grid
 - [x] Chat input: auto-resize, keyboard shortcuts, animated send button
-- [x] Message bubbles: user + assistant variants, streaming indicator, copy/feedback actions
-- [x] Mock AI responses with simulated delay
+- [x] Message bubbles: user + assistant variants, streaming indicator, copy/feedback
 - [x] Keyboard shortcuts: ⌘B, ⌘R, ⌘K
-- [x] UserAvatar with dropdown (logout)
-- [x] Animated Logo component
-- [x] AGENTS.md project memory
+
+### Phase 2 — Real AI + Persistent Storage
+- [x] Vercel AI SDK (`streamText`) for server-side streaming
+- [x] OpenRouter as initial AI provider (OpenAI-compatible via `@ai-sdk/openai`)
+- [x] Provider abstraction — swap to OpenAI/Anthropic/Gemini with one env var change
+- [x] Configurable default model via `DEFAULT_AI_MODEL` env var
+- [x] System prompt in `aiService.ts`
+- [x] MongoDB via Mongoose — two separate collections (Conversation + Message)
+- [x] SSE streaming: meta → chunk → done events
+- [x] Optimistic UI during streaming with real-time text append
+- [x] Auto-create conversation on first message
+- [x] Persist every user and assistant message to DB
+- [x] Load conversations on workspace mount
+- [x] Lazy-load messages on conversation select
+- [x] Delete conversation + cascade delete messages via API
+- [x] Conversations removed from Zustand persist (MongoDB is source of truth)
+- [x] Error banner for stream failures (dismissible)
 
 ---
 
-## Planned Features (Post-MVP)
+## Planned Features (Phase 3+)
 
 - [ ] Real GitHub OAuth (replace `src/lib/auth.ts`)
-- [ ] OpenAI / Anthropic / Gemini API streaming
 - [ ] Markdown rendering with code syntax highlighting (react-markdown + shiki)
 - [ ] Command palette (⌘K) — quick nav, search, actions
-- [ ] Multiple AI model selector (dropdown in TopBar)
+- [ ] Model selector in TopBar (functional, not UI-only)
+- [ ] Conversation rename UI (hook exists: `useRenameConversation`)
 - [ ] LangGraph agent integration
-- [ ] RAG (Retrieval Augmented Generation)
-- [ ] MCP (Model Context Protocol) tool support
-- [ ] Real GitHub repository browser (GitHub API)
-- [ ] Conversation memory persistence (DB)
+- [ ] RAG — file parsing, chunking, embeddings, vector DB, semantic search
+- [ ] MCP (Model Context Protocol) — filesystem, GitHub, terminal, browser
+- [ ] GitHub OAuth + repository browser (GitHub API)
+- [ ] Multi-agent system (Engineer, Reviewer, Debugger, Docs, Tests, Security)
 - [ ] File attachments
 - [ ] Voice input
-- [ ] Mobile sidebar drawer (responsive)
+- [ ] Mobile sidebar drawer
 - [ ] Settings page
 - [ ] Export conversation as markdown
 
@@ -271,46 +472,74 @@ interface Conversation {
 
 ## Known Issues / TODOs
 
-- [ ] `utils.ts` was partially overwritten by shadcn init — verify `cn()` export still present
-- [ ] `globals.css` was appended to by shadcn — review for any conflicting variables
-- [ ] Mobile layout: sidebar currently hides on collapse but no drawer fallback for mobile
-- [ ] `useRenameConversation` implemented but no UI trigger yet
-- [ ] Model selector in TopBar is UI-only (no actual model switching)
+- [ ] Conversation rename has no UI trigger (API + hook ready: `PATCH /api/conversations/[id]`)
+- [ ] Model selector in TopBar is UI-only (no actual model switching yet)
 - [ ] Settings button has no page/modal yet
+- [ ] Mobile layout: sidebar hides on collapse but no drawer fallback
+- [ ] Search bar in sidebar is UI-only (no filtering logic yet)
+- [ ] Pin conversation is client-side only (not persisted to DB yet)
+- [ ] No conversation pagination (loads all messages at once)
 
 ---
 
 ## Development Notes
 
-1. **Auth uses BOTH localStorage AND cookies**: localStorage holds full `MockUser` for client-side. The `devmind_session` cookie is for middleware (server-side). Both are cleared on logout.
+1. **`src/server/` is server-only** — never import anything from it in client components. Mongoose and the AI SDK run on Node.js only.
 
-2. **shadcn/ui files are in `src/components/ui/`** — never hand-edit. Re-run `npx shadcn@latest add [component]` to update or add components.
+2. **`aiModel` not `model` in Mongoose schema** — Mongoose `Document` has a built-in `model()` method; using `model` as a field name causes a TypeScript conflict. The schema uses `aiModel`.
 
-3. **Tailwind v4**: No `tailwind.config.ts` theme customization. All tokens in `globals.css` `@theme {}`.
+3. **Zustand conversations are NOT persisted to localStorage** (Phase 2 change). On refresh, conversations reload from MongoDB. Optimistic local state is session-only.
 
-4. **Framer Motion + Next.js**: All Framer Motion components must be `'use client'`. Never use in Server Components.
+4. **SSE stream sends a `meta` event first** — contains the real `conversationId` and `assistantMessageId` from the server. The client uses these to wire up the streaming bubble to the correct conversation.
 
-5. **View Transitions**: `experimental.viewTransition: true` in `next.config.ts`. Do NOT use Framer Motion `AnimatePresence` for page-level transitions.
+5. **New conversation flow**: If the user sends the first message with no active conversation, the server creates it and returns the real ID via the `meta` event. The client calls `upsertConversation()` to add a stub entry to Zustand, then reloads the full list from the API after the stream completes.
 
-6. **Mock AI responses** are in `ChatInterface.tsx` → `MOCK_RESPONSES` array and `getMockResponse()`. Replace with real API streaming.
+6. **Auth uses BOTH localStorage AND cookies**: localStorage holds full `MockUser` for client-side. The `devmind_session` cookie is for middleware. Both cleared on logout.
 
-7. **Geist font variables** are `--font-geist-sans` and `--font-geist-mono` — loaded via `next/font/google` in root layout.
+7. **Vercel AI SDK**: only `streamText` from the `ai` package is used (server-side). The client-side `useChat` hook is intentionally NOT used — Zustand owns all state.
+
+8. **shadcn/ui files are in `src/components/ui/`** — never hand-edit. Re-run `npx shadcn@latest add [component]` to update.
+
+9. **View Transitions**: `experimental.viewTransition: true` in `next.config.ts`. Do NOT use Framer Motion `AnimatePresence` for page-level transitions.
+
+---
+
+## Project Setup (from scratch)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Configure environment
+cp .env.example .env.local
+# Fill in OPENROUTER_API_KEY and MONGODB_URI
+
+# 3. Start dev server
+npm run dev
+
+# 4. Open workspace
+# Navigate to http://localhost:3000
+# Login with any name (mock auth)
+# Start chatting — responses come from OpenRouter
+```
 
 ---
 
 ## Quick Start for New AI Sessions
 
 ```bash
-# 1. Check recent git history
+# 1. Read this file fully first
+
+# 2. Check recent git history
 git log --oneline -10
 
-# 2. Find all TODOs
+# 3. Find all TODOs
 grep -r "TODO\|FIXME\|HACK" src/ --include="*.ts" --include="*.tsx"
 
-# 3. Start dev server
+# 4. Start dev server
 npm run dev
 
-# 4. Build check
+# 5. Build check
 npm run build
 ```
 
@@ -318,4 +547,4 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-01 | Session: Frontend MVP Implementation*
+*Last Updated: 2026-07-03 | Phase: 2 — Real AI + Persistent Storage*
