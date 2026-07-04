@@ -56,6 +56,19 @@ function getProvider(): AIProvider {
   return _provider;
 }
 
+// ── Context Window Configuration ──────────────────────────────────
+// Configurable via environment variable — no hardcoded value
+const MAX_CONTEXT_MESSAGES = (() => {
+  const envVal = process.env.MAX_CONTEXT_MESSAGES;
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return 20; // Default fallback
+})();
+
 // ── Public API ────────────────────────────────────────────────
 
 export interface StreamChatOptions {
@@ -66,17 +79,50 @@ export interface StreamChatOptions {
 }
 
 /**
+ * Truncates conversation messages using a sliding window strategy.
+ * This ensures that we only send the most recent N messages to the LLM
+ * to avoid exceeding the model's context window.
+ * 
+ * Future Upgrade Points:
+ * 1. Token-based context management:
+ *    - Instead of message count, we can count/estimate tokens of each message (e.g. using tiktoken or approximate char/word ratio).
+ *    - Truncate messages dynamically when they exceed a target token limit (e.g., 80% of model context window).
+ * 2. Automatic conversation summarization:
+ *    - If messages exceed a certain length/limit, trigger an LLM-based summarization of the older history.
+ *    - Prepend the summary as context before the active sliding window of messages.
+ * 3. Semantic Memory (RAG):
+ *    - Retrieve older messages or relevant code context via semantic search in a vector database.
+ *    - Inject these retrieved chunks as background context into the prompt.
+ */
+export function truncateConversationContext(
+  messages: AIMessage[],
+  maxMessages: number = MAX_CONTEXT_MESSAGES
+): AIMessage[] {
+  if (messages.length <= maxMessages) {
+    return messages;
+  }
+  // Sliding window: keep only the most recent N messages
+  console.log(
+    `[aiService] Sliding window applied: limiting conversation context from ${messages.length} messages to the most recent ${maxMessages} messages.`
+  );
+  return messages.slice(-maxMessages);
+}
+
+/**
  * Stream a chat response.
  * @returns A ReadableStream of text chunks suitable for SSE streaming.
  */
 export async function streamChat(options: StreamChatOptions): Promise<ReadableStream<string>> {
   const { messages, model = DEFAULT_MODEL } = options;
 
+  // Apply the sliding window strategy to limit context sent to the provider.
+  const truncatedMessages = truncateConversationContext(messages);
+
   // Prepend system prompt — invisible to the user but shapes AI behavior
   // Pass the system prompt separately as instructions.
   // Newer AI SDK versions don't allow system messages in `messages`.
-  return getProvider().stream(messages, model, SYSTEM_PROMPT);
+  return getProvider().stream(truncatedMessages, model, SYSTEM_PROMPT);
 }
 
 /** Expose the resolved default model (useful for displaying in the UI) */
-export { DEFAULT_MODEL };
+export { DEFAULT_MODEL, MAX_CONTEXT_MESSAGES };

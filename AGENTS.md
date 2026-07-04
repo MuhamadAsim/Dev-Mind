@@ -12,8 +12,8 @@
 |---|---|
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
-| **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer |
-| **Phase** | Phase 2 — Real AI + Persistent Storage |
+| **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Currently a fully functional AI chat application with persistent conversation history. |
+| **Phase** | Phase 4 — Repository Integration |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -108,7 +108,7 @@ src/store/
 
 ### 7. AI Provider Architecture
 ```
-API Route  →  aiService.ts  →  AIProvider interface  →  OpenRouter provider
+User → API Route → AI Service → AI Provider → OpenRouter/OpenAI-compatible API → Stream Response → Persist Assistant Message
 ```
 - **`src/server/ai/types.ts`**: `AIMessage` and `AIProvider` interface. Every provider implements this.
 - **`src/server/ai/aiService.ts`**: Single entry-point. Builds system prompt, selects provider, exposes `streamChat()`.
@@ -149,6 +149,13 @@ Client reads stream:
   → chunk → appendToMessage() (live text update in Zustand)
   → done  → mark isStreaming:false, reload conversation list from API
 ```
+
+### 10. Long Conversation Context Management (Sliding Window)
+To prevent exceeding the model's context window limit as a conversation grows, a sliding window context strategy is applied:
+- **Full History Persisted**: The complete conversation history remains fully stored in MongoDB (`messages` collection) without truncation or deletion.
+- **Context Limit**: Only the most recent `MAX_CONTEXT_MESSAGES` (configured via `.env.local` or defaulting to 20) are sent to the AI provider.
+- **System Prompt**: The system prompt is always appended separately as instruction headers, ensuring it is never lost regardless of window truncation.
+- **Extensible Architecture**: The helper `truncateConversationContext` in `src/server/ai/aiService.ts` serves as the entry-point. It is designed to easily swap in token-based estimation, LLM summarization, or semantic memory (RAG) retrievals in the future.
 
 ---
 
@@ -431,42 +438,65 @@ User deletes conversation
 - [x] Message bubbles: user + assistant variants, streaming indicator, copy/feedback
 - [x] Keyboard shortcuts: ⌘B, ⌘R, ⌘K
 
-### Phase 2 — Real AI + Persistent Storage
+### Phase 2 — AI Integration
+- [x] Real AI provider integration
+- [x] Streaming AI responses
+- [x] Provider abstraction
+- [x] Environment-based model configuration
+- [x] Server-side AI service architecture
 - [x] Vercel AI SDK (`streamText`) for server-side streaming
 - [x] OpenRouter as initial AI provider (OpenAI-compatible via `@ai-sdk/openai`)
-- [x] Provider abstraction — swap to OpenAI/Anthropic/Gemini with one env var change
 - [x] Configurable default model via `DEFAULT_AI_MODEL` env var
 - [x] System prompt in `aiService.ts`
-- [x] MongoDB via Mongoose — two separate collections (Conversation + Message)
 - [x] SSE streaming: meta → chunk → done events
+- [x] Error banner for stream failures (dismissible)
+
+### Phase 3 — Conversation & Persistence
+- [x] Conversation persistence (MongoDB via Mongoose)
+- [x] Message persistence
+- [x] Continue previous conversations
+- [x] Conversation pinning
+- [x] Conversation deletion
 - [x] Optimistic UI during streaming with real-time text append
 - [x] Auto-create conversation on first message
-- [x] Persist every user and assistant message to DB
 - [x] Load conversations on workspace mount
 - [x] Lazy-load messages on conversation select
 - [x] Delete conversation + cascade delete messages via API
 - [x] Conversations removed from Zustand persist (MongoDB is source of truth)
-- [x] Error banner for stream failures (dismissible)
+- [x] Long conversation sliding window context limit (configurable)
 
 ---
 
-## Planned Features (Phase 3+)
+## Planned Features (Phase 4 — Repository Integration)
 
-- [ ] Real GitHub OAuth (replace `src/lib/auth.ts`)
+- [ ] GitHub OAuth
+- [ ] Repository connection
+- [ ] Repository browser
+- [ ] File explorer using real repository data
+- [ ] Repository metadata
 - [ ] Markdown rendering with code syntax highlighting (react-markdown + shiki)
 - [ ] Command palette (⌘K) — quick nav, search, actions
 - [ ] Model selector in TopBar (functional, not UI-only)
-- [ ] Conversation rename UI (hook exists: `useRenameConversation`)
 - [ ] LangGraph agent integration
 - [ ] RAG — file parsing, chunking, embeddings, vector DB, semantic search
 - [ ] MCP (Model Context Protocol) — filesystem, GitHub, terminal, browser
-- [ ] GitHub OAuth + repository browser (GitHub API)
 - [ ] Multi-agent system (Engineer, Reviewer, Debugger, Docs, Tests, Security)
 - [ ] File attachments
 - [ ] Voice input
 - [ ] Mobile sidebar drawer
 - [ ] Settings page
-- [ ] Export conversation as markdown
+
+---
+
+## Future Improvements
+
+- [ ] Conversation renaming
+- [ ] Auto-generated conversation titles
+- [x] Long conversation handling (sliding window)
+- [ ] Token-aware context management
+- [ ] Conversation summarization
+- [ ] Export/import conversations
+- [ ] Semantic memory
 
 ---
 
@@ -547,4 +577,4 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-03 | Phase: 2 — Real AI + Persistent Storage*
+*Last Updated: 2026-07-05 | Phase: 4 — Repository Integration*
