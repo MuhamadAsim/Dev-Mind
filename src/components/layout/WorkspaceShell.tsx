@@ -8,11 +8,13 @@ import { ChatInterface } from '@/components/chat/ChatInterface';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useInitAuth } from '@/store/hooks/useAuth';
 import { useSetConversations } from '@/store/hooks/useChat';
+import { useFetchConnectedRepos } from '@/store/hooks/useRepo';
 import { Conversation } from '@/types';
 
 export function WorkspaceShell() {
   const initAuth = useInitAuth();
   const setConversations = useSetConversations();
+  const fetchConnectedRepos = useFetchConnectedRepos();
 
   // Mount auth state from localStorage on load
   useEffect(() => {
@@ -52,6 +54,11 @@ export function WorkspaceShell() {
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  // Load connected repositories from MongoDB on mount
+  useEffect(() => {
+    fetchConnectedRepos();
+  }, [fetchConnectedRepos]);
 
   // Register global keyboard shortcuts
   useKeyboardShortcuts();

@@ -72,17 +72,19 @@ src/store/
 ├── slices/
 │   ├── authSlice.ts            ← user, isAuthenticated, isLoading, login, logout, initAuth
 │   ├── uiSlice.ts              ← theme, isSidebarOpen, isRepoPanelOpen, widths, commandPalette
-│   └── chatSlice.ts            ← conversations, activeConversationId, CRUD + streaming actions
+│   ├── chatSlice.ts            ← conversations, activeConversationId, CRUD + streaming actions
+│   └── repoSlice.ts            ← connectedRepos, activeRepoId, filesCache, expandedFolders, search
 └── hooks/
     ├── useAuth.ts              ← Auth selector hooks (ONLY import from here, not useStore)
     ├── useUI.ts                ← UI selector hooks
-    └── useChat.ts              ← Chat selector hooks
+    ├── useChat.ts              ← Chat selector hooks
+    └── useRepo.ts              ← Repo selector hooks (20 atomic selectors + action hooks)
 ```
 
 **Rule**: Components **never** import `useStore` directly. Always use domain hooks.
 
 **Persist config** (Zustand persist middleware): Only `theme`, `isSidebarOpen`, `isRepoPanelOpen` are persisted.  
-**Conversations are NOT persisted to localStorage** — MongoDB is the source of truth. Zustand is a session-time cache.
+**Conversations and repos are NOT persisted to localStorage** — MongoDB is the source of truth. Zustand is a session-time cache.
 
 ### 4. Client/Server Component Split
 - `app/**/page.tsx` → Server Components (metadata, redirects)
@@ -116,13 +118,14 @@ User → API Route → AI Service → AI Provider → OpenRouter/OpenAI-compatib
 - **To add a new provider**: Create `src/server/ai/providers/<name>.ts`, add a `case` in `aiService.ts`, set `ACTIVE_AI_PROVIDER` env var.
 - The Vercel AI SDK `useChat` hook is **intentionally not used** — Zustand manages all state.
 
-### 8. Database Architecture (Phase 2)
-Two separate MongoDB collections:
+### 8. Database Architecture (Phase 2 + 4)
+Three separate MongoDB collections:
 
 | Collection | Purpose |
 |---|---|
 | `conversations` | Conversation metadata only (title, aiModel, timestamps, metadata) |
 | `messages` | All messages with `conversationId` foreign key |
+| `connectedrepositories` | Connected GitHub/local repos with provider config + cached metadata |
 
 **Why separate collections (not embedded)?**
 - Efficient pagination for large conversations
@@ -168,36 +171,51 @@ src/
 │   ├── (workspace)/workspace/page.tsx   # /workspace — Workspace page
 │   ├── api/
 │   │   ├── chat/stream/route.ts         # POST — SSE streaming AI chat
-│   │   └── conversations/
-│   │       ├── route.ts                 # GET  — list all conversations
+│   │   ├── conversations/
+│   │   │   ├── route.ts                 # GET  — list all conversations
+│   │   │   └── [id]/
+│   │   │       ├── route.ts             # GET/PATCH/DELETE — single conversation
+│   │   │       └── messages/route.ts    # GET — messages for a conversation
+│   │   └── repos/
+│   │       ├── route.ts                 # GET  — list repos | POST — connect repo
 │   │       └── [id]/
-│   │           ├── route.ts             # GET/PATCH/DELETE — single conversation
-│   │           └── messages/route.ts    # GET — messages for a conversation
+│   │           ├── route.ts             # DELETE — disconnect repo
+│   │           ├── files/route.ts       # GET ?path=  or ?search=  — list/search files
+│   │           └── file-content/route.ts# GET ?path= — read raw file content
 │   ├── layout.tsx                       # Root layout
 │   ├── page.tsx                         # Root redirect (server component)
 │   └── globals.css                      # Tailwind v4 @theme + design system
 │
-├── server/                              # ← NEW: server-only code (never imported by client)
+├── server/                              # Server-only code (never imported by client)
 │   ├── ai/
 │   │   ├── types.ts                     # AIMessage, AIProvider, AIProviderConfig interfaces
 │   │   ├── aiService.ts                 # streamChat() — single AI entry-point
 │   │   └── providers/
 │   │       └── openrouter.ts            # OpenRouter provider (add more providers here)
-│   └── db/
-│       ├── mongoose.ts                  # Connection singleton with global cache
-│       ├── conversationService.ts       # All conversation DB operations
-│       ├── messageService.ts            # All message DB operations
-│       └── models/
-│           ├── Conversation.ts          # Mongoose schema — metadata only
-│           ├── Message.ts               # Mongoose schema — separate collection
-│           └── index.ts                 # Barrel export
+│   ├── db/
+│   │   ├── mongoose.ts                  # Connection singleton with global cache
+│   │   ├── conversationService.ts       # All conversation DB operations
+│   │   ├── messageService.ts            # All message DB operations
+│   │   └── models/
+│   │       ├── Conversation.ts          # Mongoose schema — metadata only
+│   │       ├── Message.ts               # Mongoose schema — separate collection
+│   │       ├── ConnectedRepository.ts   # Mongoose schema — connected repos
+│   │       └── index.ts                 # Barrel export
+│   └── repos/
+│       ├── types.ts                     # RepoFile, RepositoryMetadata, RepositoryProvider interface
+│       ├── repositoryService.ts         # connectRepository, listDirectory, readFile, searchFiles
+│       ├── repositoryTools.ts           # Thin tool wrappers — for future AI agent use
+│       └── providers/
+│           ├── github.ts                # GitHubProvider — GitHub REST API
+│           └── local.ts                 # LocalProvider — local filesystem (Node.js fs)
 │
 ├── components/
 │   ├── ui/                              # shadcn/ui — DO NOT hand-edit
 │   ├── layout/
-│   │   ├── WorkspaceShell.tsx           # 3-panel layout + auth init + conversation load
+│   │   ├── WorkspaceShell.tsx           # 3-panel layout + auth + conversation + repo init
 │   │   ├── Sidebar.tsx                  # Left panel: API-backed delete, lazy message load
-│   │   ├── RepositoryPanel.tsx          # Right panel: mock files, branches, PRs
+│   │   ├── RepositoryPanel.tsx          # Right panel: live file tree, search, preview, connect
+│   │   ├── ConnectRepoModal.tsx         # Dialog: connect GitHub or local repo
 │   │   └── TopBar.tsx                   # Header: sidebar toggle, model, theme, repo toggle
 │   ├── chat/
 │   │   ├── ChatInterface.tsx            # Real SSE streaming — no mock logic
@@ -214,9 +232,9 @@ src/
 │       └── AnimatedBackground.tsx       # Canvas mesh gradient (login page)
 │
 ├── store/
-│   ├── index.ts                         # Root store (conversations NOT persisted)
-│   ├── slices/                          # authSlice, uiSlice, chatSlice
-│   └── hooks/                           # useAuth, useUI, useChat
+│   ├── index.ts                         # Root store (conversations + repos NOT persisted)
+│   ├── slices/                          # authSlice, uiSlice, chatSlice, repoSlice
+│   └── hooks/                           # useAuth, useUI, useChat, useRepo
 │
 ├── hooks/
 │   └── useKeyboardShortcuts.ts         # ⌘B (sidebar), ⌘R (panel), ⌘K (cmd palette)
@@ -317,6 +335,11 @@ interface Conversation {
 | `PATCH` | `/api/conversations/[id]` | Rename conversation. Body: `{ title }` |
 | `DELETE` | `/api/conversations/[id]` | Delete conversation + all its messages |
 | `GET` | `/api/conversations/[id]/messages` | Get all messages for a conversation |
+| `GET` | `/api/repos` | List all connected repositories |
+| `POST` | `/api/repos` | Connect a repository. Body: `{ type: 'github'\|'local', config }` |
+| `DELETE` | `/api/repos/[id]` | Disconnect a repository |
+| `GET` | `/api/repos/[id]/files` | List directory. `?path=src/` or `?search=query` for search |
+| `GET` | `/api/repos/[id]/file-content` | Read raw file content. `?path=src/index.ts` |
 
 ---
 
@@ -332,6 +355,10 @@ ACTIVE_AI_PROVIDER=openrouter             # Optional — 'openrouter' (default),
 
 # Database
 MONGODB_URI=mongodb://localhost:27017/devmind  # or Atlas connection string
+
+# Repository
+GITHUB_TOKEN=ghp_...                      # Optional — GitHub PAT for higher API rate limits
+                                           # Also checked as GITHUB_PERSONAL_ACCESS_TOKEN
 
 # App
 NEXT_PUBLIC_APP_URL=http://localhost:3000  # Used in OpenRouter request headers
@@ -465,15 +492,23 @@ User deletes conversation
 - [x] Conversations removed from Zustand persist (MongoDB is source of truth)
 - [x] Long conversation sliding window context limit (configurable)
 
+### Phase 4 — Repository Integration (In Progress)
+- [x] `ConnectedRepository` Mongoose model + MongoDB collection
+- [x] `RepositoryProvider` interface + `GitHubProvider` (GitHub REST API) + `LocalProvider` (Node.js fs)
+- [x] `repositoryService.ts` — connect, disconnect, list, browse, read, search
+- [x] `repositoryTools.ts` — thin tool wrappers for future AI agent use
+- [x] API routes: `/api/repos`, `/api/repos/[id]`, `/api/repos/[id]/files`, `/api/repos/[id]/file-content`
+- [x] `repoSlice.ts` — full Zustand slice for repo state (connectedRepos, filesCache, expandedFolders, search)
+- [x] `useRepo.ts` — 20 domain selector + action hooks
+- [x] `WorkspaceShell` fetches repos on mount (alongside conversations)
+- [x] `ConnectRepoModal` — animated dialog for GitHub (owner/repo or URL) and local path
+- [x] `RepositoryPanel` — live file tree, expandable folders, file preview, search, repo selector, disconnect
+
 ---
 
-## Planned Features (Phase 4 — Repository Integration)
+## Planned Features (Remaining)
 
 - [ ] GitHub OAuth
-- [ ] Repository connection
-- [ ] Repository browser
-- [ ] File explorer using real repository data
-- [ ] Repository metadata
 - [ ] Markdown rendering with code syntax highlighting (react-markdown + shiki)
 - [ ] Command palette (⌘K) — quick nav, search, actions
 - [ ] Model selector in TopBar (functional, not UI-only)
@@ -509,6 +544,10 @@ User deletes conversation
 - [ ] Search bar in sidebar is UI-only (no filtering logic yet)
 - [ ] Pin conversation is client-side only (not persisted to DB yet)
 - [ ] No conversation pagination (loads all messages at once)
+- [ ] GitHub API rate limit: unauthenticated requests limited to 60/hr — set `GITHUB_TOKEN` env var to increase
+- [ ] File preview is plain text only — no syntax highlighting yet (react-markdown + shiki planned)
+- [ ] Repository file search uses GitHub code search API, which may rate-limit quickly without a token
+- [ ] `repoSlice` search makes two fetch calls in `searchRepoFiles` (one dead, one live) — cleanup needed
 
 ---
 
@@ -518,7 +557,7 @@ User deletes conversation
 
 2. **`aiModel` not `model` in Mongoose schema** — Mongoose `Document` has a built-in `model()` method; using `model` as a field name causes a TypeScript conflict. The schema uses `aiModel`.
 
-3. **Zustand conversations are NOT persisted to localStorage** (Phase 2 change). On refresh, conversations reload from MongoDB. Optimistic local state is session-only.
+3. **Zustand conversations and repos are NOT persisted to localStorage**. On refresh, both reload from MongoDB. Only UI preferences are persisted.
 
 4. **SSE stream sends a `meta` event first** — contains the real `conversationId` and `assistantMessageId` from the server. The client uses these to wire up the streaming bubble to the correct conversation.
 
@@ -531,6 +570,12 @@ User deletes conversation
 8. **shadcn/ui files are in `src/components/ui/`** — never hand-edit. Re-run `npx shadcn@latest add [component]` to update.
 
 9. **View Transitions**: `experimental.viewTransition: true` in `next.config.ts`. Do NOT use Framer Motion `AnimatePresence` for page-level transitions.
+
+10. **Repository provider pattern**: `RepositoryProvider` interface in `src/server/repos/types.ts` defines `getMetadata`, `listDirectory`, `readFile`, `searchFiles`. Add new providers (e.g., GitLab, Bitbucket) by implementing the interface and adding a `case` in `getProvider()` in `repositoryService.ts`.
+
+11. **`lucide-react` in this project does NOT export `Github`** — use `GitFork` or `GitBranch` instead.
+
+12. **Repository files are fetched lazily**: root is loaded on `setActiveRepoId()`. Sub-folders load on `toggleFolderExpanded()`. Results are cached in `filesCache` for the session.
 
 ---
 
@@ -577,4 +622,4 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-05 | Phase: 4 — Repository Integration*
+*Last Updated: 2026-07-05 | Phase: 4 — Repository Integration (frontend wiring complete)*
