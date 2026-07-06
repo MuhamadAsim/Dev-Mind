@@ -46,11 +46,15 @@ export async function connectRepository(
     if (!owner || !repo) {
       const url = configInput.url;
       if (url) {
-        // Parse owner and repo from github URL (e.g. github.com/owner/repo or git@github.com:owner/repo.git)
-        const match = url.match(/github\.com[\/:][^\/]+\/[^\/\s\.]+ /) || url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+        // FIX: previous regex had a trailing space and no capture groups,
+        // so it could never match — it was silently dead code.
+        // Handles both:
+        //   https://github.com/owner/repo(.git)
+        //   git@github.com:owner/repo(.git)
+        const match = url.match(/github\.com[/:]([^/]+)\/([^/.\s]+)(?:\.git)?/);
         if (match) {
           owner = match[1];
-          repo = match[2].replace(/\.git$/, '');
+          repo = match[2];
         }
       }
     }
@@ -77,6 +81,13 @@ export async function connectRepository(
   // Fetch initial metadata from provider to check connection
   const provider = getProvider(type);
   const metadata = await provider.getMetadata(config);
+
+  // FIX: persist defaultBranch into config itself (not just the top-level DB field)
+  // so provider methods that only receive `config` — e.g. GitHubProvider.searchFiles's
+  // tree-listing fallback — know which branch to query without a second DB lookup.
+  if (type === 'github' && metadata.defaultBranch) {
+    config = { ...config, defaultBranch: metadata.defaultBranch };
+  }
 
   const newRepo = new ConnectedRepositoryModel({
     name: metadata.name || resolvedName,
