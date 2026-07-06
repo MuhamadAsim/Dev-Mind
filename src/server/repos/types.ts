@@ -44,4 +44,24 @@ export interface RepositoryProvider {
 
   /** Search for files in the repository matching the query */
   searchFiles(config: Record<string, string>, query: string): Promise<RepoFile[]>;
+
+  /**
+   * Write content to a file — creates it if it doesn't exist, overwrites if it does.
+   * Only ever called from server code AFTER the user has explicitly confirmed —
+   * never called directly by an LLM tool. See ai/tools.ts proposeFileWrite.
+   * @param commitMessage GitHub only — ignored by LocalProvider.
+   */
+  writeFile(
+    config: Record<string, string>,
+    filePath: string,
+    content: string,
+    commitMessage?: string
+  ): Promise<void>;
+
+  /**
+   * Create a directory (and any missing parent directories).
+   * NOTE: Git has no concept of an empty directory — GitHubProvider
+   * implements this by committing a placeholder `.gitkeep` file inside it.
+   */
+  createDirectory(config: Record<string, string>, dirPath: string): Promise<void>;
 }

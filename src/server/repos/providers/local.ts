@@ -19,6 +19,14 @@ function runGitCommand(cmd: string, cwd: string): Promise<string> {
   });
 }
 
+/** Path traversal guard shared by every method that touches the filesystem. */
+function assertInsideRepo(localPath: string, targetPath: string) {
+  const resolved = path.resolve(targetPath);
+  if (!resolved.startsWith(path.resolve(localPath))) {
+    throw new Error('Path traversal detected');
+  }
+}
+
 export const LocalProvider: RepositoryProvider = {
   async getMetadata(config: Record<string, string>): Promise<RepositoryMetadata> {
     const localPath = config.localPath;
@@ -35,7 +43,6 @@ export const LocalProvider: RepositoryProvider = {
       throw new Error(`Path is not a directory: ${localPath}`);
     }
 
-    // Detect if Git repo
     const isGit = fs.existsSync(path.join(localPath, '.git'));
     let currentBranch = 'none';
     let gitStatus = 'clean';
@@ -54,7 +61,7 @@ export const LocalProvider: RepositoryProvider = {
       config,
       description: `Local directory at ${localPath}`,
       defaultBranch: currentBranch,
-      primaryLanguage: 'TypeScript', // Inferred/default
+      primaryLanguage: 'TypeScript',
       lastUpdated: stat.mtime,
       currentBranch,
       gitStatus,
@@ -74,7 +81,6 @@ export const LocalProvider: RepositoryProvider = {
     const result: RepoFile[] = [];
 
     for (const file of files) {
-      // Ignore version control & build artifacts for safety and performance
       if (['.git', 'node_modules', '.next', 'dist', 'build', '.DS_Store'].includes(file)) {
         continue;
       }
@@ -84,22 +90,12 @@ export const LocalProvider: RepositoryProvider = {
       const stat = fs.statSync(fullPath);
 
       if (stat.isDirectory()) {
-        result.push({
-          name: file + '/',
-          path: relativePath,
-          type: 'folder',
-        });
+        result.push({ name: file + '/', path: relativePath, type: 'folder' });
       } else {
-        result.push({
-          name: file,
-          path: relativePath,
-          type: 'file',
-          size: stat.size,
-        });
+        result.push({ name: file, path: relativePath, type: 'file', size: stat.size });
       }
     }
 
-    // Sort folders first, then files
     return result.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -111,10 +107,7 @@ export const LocalProvider: RepositoryProvider = {
     if (!localPath) throw new Error('localPath is required');
 
     const targetFile = path.join(localPath, filePath);
-    // Path traversal guard
-    if (!targetFile.startsWith(path.resolve(localPath))) {
-      throw new Error('Path traversal detected');
-    }
+    assertInsideRepo(localPath, targetFile);
 
     if (!fs.existsSync(targetFile)) {
       throw new Error(`File does not exist: ${filePath}`);
@@ -131,7 +124,7 @@ export const LocalProvider: RepositoryProvider = {
     const lowerQuery = query.toLowerCase();
 
     function recurse(dir: string) {
-      if (matches.length >= 100) return; // Limit search results
+      if (matches.length >= 100) return;
 
       const files = fs.readdirSync(dir);
       for (const file of files) {
@@ -146,17 +139,38 @@ export const LocalProvider: RepositoryProvider = {
         if (stat.isDirectory()) {
           recurse(fullPath);
         } else if (file.toLowerCase().includes(lowerQuery) || relativePath.toLowerCase().includes(lowerQuery)) {
-          matches.push({
-            name: file,
-            path: relativePath,
-            type: 'file',
-            size: stat.size,
-          });
+          matches.push({ name: file, path: relativePath, type: 'file', size: stat.size });
         }
       }
     }
 
     recurse(localPath);
     return matches;
+  },
+
+  // ── NEW: write support ────────────────────────────────────
+
+  async writeFile(config: Record<string, string>, filePath: string, content: string): Promise<void> {
+    const localPath = config.localPath;
+    if (!localPath) throw new Error('localPath is required');
+
+    const targetFile = path.join(localPath, filePath);
+    assertInsideRepo(localPath, targetFile);
+
+    // Create any missing parent directories (e.g. writing "src/new/deep/file.ts"
+    // when "new/deep" doesn't exist yet) — mkdir with recursive:true is a no-op
+    // if the directory already exists, so this is always safe to call.
+    fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+    fs.writeFileSync(targetFile, content, 'utf-8');
+  },
+
+  async createDirectory(config: Record<string, string>, dirPath: string): Promise<void> {
+    const localPath = config.localPath;
+    if (!localPath) throw new Error('localPath is required');
+
+    const targetDir = path.join(localPath, dirPath);
+    assertInsideRepo(localPath, targetDir);
+
+    fs.mkdirSync(targetDir, { recursive: true });
   },
 };

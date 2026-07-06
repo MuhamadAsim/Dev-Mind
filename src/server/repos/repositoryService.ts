@@ -46,11 +46,6 @@ export async function connectRepository(
     if (!owner || !repo) {
       const url = configInput.url;
       if (url) {
-        // FIX: previous regex had a trailing space and no capture groups,
-        // so it could never match — it was silently dead code.
-        // Handles both:
-        //   https://github.com/owner/repo(.git)
-        //   git@github.com:owner/repo(.git)
         const match = url.match(/github\.com[/:]([^/]+)\/([^/.\s]+)(?:\.git)?/);
         if (match) {
           owner = match[1];
@@ -65,10 +60,8 @@ export async function connectRepository(
     resolvedName = `${owner}/${repo}`;
   }
 
-  // Check if already exists in DB
   const existing = await ConnectedRepositoryModel.findOne({
     type,
-    // Compare config subfields
     ...(type === 'local'
       ? { 'config.localPath': config.localPath }
       : { 'config.owner': config.owner, 'config.repo': config.repo }),
@@ -78,13 +71,9 @@ export async function connectRepository(
     return existing;
   }
 
-  // Fetch initial metadata from provider to check connection
   const provider = getProvider(type);
   const metadata = await provider.getMetadata(config);
 
-  // FIX: persist defaultBranch into config itself (not just the top-level DB field)
-  // so provider methods that only receive `config` — e.g. GitHubProvider.searchFiles's
-  // tree-listing fallback — know which branch to query without a second DB lookup.
   if (type === 'github' && metadata.defaultBranch) {
     config = { ...config, defaultBranch: metadata.defaultBranch };
   }
@@ -140,4 +129,29 @@ export async function searchRepositoryFiles(id: string, query: string): Promise<
 
   const provider = getProvider(repo.type);
   return provider.searchFiles(repo.config, query);
+}
+
+// ── NEW: write support — dispatch only, same pattern as reads above ──
+
+/** Write (create/overwrite) a file. Only ever call this AFTER user confirmation. */
+export async function writeRepositoryFile(
+  id: string,
+  filePath: string,
+  content: string,
+  commitMessage?: string
+): Promise<void> {
+  const repo = await getRepository(id);
+  if (!repo) throw new Error(`Repository not found: ${id}`);
+
+  const provider = getProvider(repo.type);
+  return provider.writeFile(repo.config, filePath, content, commitMessage);
+}
+
+/** Create a directory. Only ever call this AFTER user confirmation. */
+export async function createRepositoryDirectory(id: string, dirPath: string): Promise<void> {
+  const repo = await getRepository(id);
+  if (!repo) throw new Error(`Repository not found: ${id}`);
+
+  const provider = getProvider(repo.type);
+  return provider.createDirectory(repo.config, dirPath);
 }

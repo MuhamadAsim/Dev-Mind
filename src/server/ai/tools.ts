@@ -19,30 +19,19 @@ const NO_REPO_ERROR = {
     'No repository is currently active. Call listConnectedRepos to see what\'s connected, then selectRepo to activate one before reading files.',
 };
 
-/** Case-insensitive substring match against connected repo names.
- *  Known limitation: if two repo names both match, this returns the
- *  first one found — good enough for now, but if you hit this in
- *  practice, upgrade it to return all matches and let the LLM ask
- *  the user to disambiguate instead of silently picking one. */
 async function findRepoByName(nameQuery: string) {
   const repos = await listAllConnectedRepos();
   const lower = nameQuery.trim().toLowerCase();
   return repos.find((r) => r.name.toLowerCase().includes(lower)) ?? null;
 }
 
-/**
- * Builds the full tool set for one chat turn.
- * `session` is shared (by reference) across every tool call in this turn
- * AND is read again by route.ts after the stream ends — that's how a
- * repo picked mid-chat gets pushed back to the client's Zustand store.
- */
 export function createRepositoryTools(session: ChatSession) {
   return {
-    // ── Repo management — always available, no active repo required ──
+    // ── Repo management ──
 
     listConnectedRepos: tool({
       description:
-        'List every repository the user has connected (GitHub and local). Call this whenever the user asks about "the repo" / "my project" but no repository is currently active, so you can show them their options before doing anything else.',
+        'List every repository the user has connected (GitHub and local). Call this whenever the user asks about "the repo" / "my project" but no repository is currently active.',
       inputSchema: z.object({}),
       execute: async () => {
         const repos = await listAllConnectedRepos();
@@ -55,20 +44,16 @@ export function createRepositoryTools(session: ChatSession) {
 
     selectRepo: tool({
       description:
-        'Activate a connected repository by name so file/read/search tools operate on it. If you don\'t know the exact name, call listConnectedRepos first.',
+        'Activate a connected repository by name so file/read/search/write tools operate on it. If you don\'t know the exact name, call listConnectedRepos first.',
       inputSchema: z.object({
-        repoName: z
-          .string()
-          .describe('Name (or partial name) of the repo to activate, e.g. "devmind" or "owner/repo".'),
+        repoName: z.string().describe('Name (or partial name) of the repo to activate.'),
       }),
       execute: async ({ repoName }) => {
         const repo = await findRepoByName(repoName);
         if (!repo) {
-          return {
-            error: `No connected repository matches "${repoName}". Call listConnectedRepos to see available options.`,
-          };
+          return { error: `No connected repository matches "${repoName}". Call listConnectedRepos to see available options.` };
         }
-        session.activeRepoId = repo.id; // ← the actual mid-turn switch
+        session.activeRepoId = repo.id;
         return { success: true, activeRepoId: repo.id, name: repo.name };
       },
     }),
@@ -91,14 +76,14 @@ export function createRepositoryTools(session: ChatSession) {
         await disconnectRepoById(targetId);
 
         if (session.activeRepoId === targetId) {
-          session.activeRepoId = null; // clear it so route.ts pushes null to the client too
+          session.activeRepoId = null;
         }
 
         return { success: true, disconnectedName: repo?.name ?? repoName };
       },
     }),
 
-    // ── Repo content — require an active repo ──
+    // ── Repo content — read ──
 
     readFile: tool({
       description: 'Read the text content of a file from the active repository.',
@@ -194,6 +179,73 @@ export function createRepositoryTools(session: ChatSession) {
         } catch (error: any) {
           return { error: error.message || String(error) };
         }
+      },
+    }),
+
+    // ── Repo content — write (PROPOSE ONLY — never writes directly) ──
+
+    proposeFileWrite: tool({
+      description:
+        'Propose writing content to a file (creating or overwriting it) in the active repository. This does NOT write anything — it only stages a proposal. You MUST show the user the exact file path and content, and explicitly ask them to reply "yes" to confirm or "no" to cancel, before this takes effect. Never tell the user the file has been written — it has not, until they confirm.',
+      inputSchema: z.object({
+        filePath: z.string().describe('Path relative to repo root, e.g. "src/utils/helpers.ts".'),
+        content: z.string().describe('Full file content to write.'),
+        commitMessage: z
+          .string()
+          .optional()
+          .describe('Git commit message. Only used for GitHub repos; ignored for local repos.'),
+      }),
+      execute: async ({ filePath, content, commitMessage }) => {
+        if (!session.activeRepoId) return NO_REPO_ERROR;
+        const repo = await getRepoById(session.activeRepoId);
+        if (!repo) return { error: 'Active repository no longer exists.' };
+
+        session.pendingWrite = {
+          action: 'writeFile',
+          repoId: session.activeRepoId,
+          repoName: repo.name,
+          path: filePath,
+          content,
+          commitMessage,
+          proposedAt: new Date().toISOString(),
+        };
+
+        return {
+          proposed: true,
+          filePath,
+          repoName: repo.name,
+          preview: content.length > 500 ? content.slice(0, 500) + '\n…(truncated)' : content,
+          instructions:
+            'Show this file path and content to the user now, and ask them to reply "yes" to confirm or "no" to cancel. Do not assume approval and do not say it has been written.',
+        };
+      },
+    }),
+
+    proposeCreateDirectory: tool({
+      description:
+        'Propose creating a new directory in the active repository. This does NOT create anything — the user must confirm with "yes" in their next message.',
+      inputSchema: z.object({
+        dirPath: z.string().describe('Directory path relative to repo root, e.g. "src/components/widgets".'),
+      }),
+      execute: async ({ dirPath }) => {
+        if (!session.activeRepoId) return NO_REPO_ERROR;
+        const repo = await getRepoById(session.activeRepoId);
+        if (!repo) return { error: 'Active repository no longer exists.' };
+
+        session.pendingWrite = {
+          action: 'createDirectory',
+          repoId: session.activeRepoId,
+          repoName: repo.name,
+          path: dirPath,
+          proposedAt: new Date().toISOString(),
+        };
+
+        return {
+          proposed: true,
+          dirPath,
+          repoName: repo.name,
+          instructions: 'Ask the user to confirm ("yes") or cancel ("no") before this directory is actually created.',
+        };
       },
     }),
   };

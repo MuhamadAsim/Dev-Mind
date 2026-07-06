@@ -21,24 +21,72 @@ interface GitHubTreeItem {
   type: 'blob' | 'tree' | 'commit';
 }
 
-async function githubFetch(url: string, token?: string): Promise<any> {
+/**
+ * Shared GitHub API request helper.
+ * Extended (from the original GET-only version) to also support PUT with a
+ * JSON body, needed for writeFile's Contents API call.
+ */
+async function githubFetch(
+  url: string,
+  options: { method?: string; body?: Record<string, unknown> } = {}
+): Promise<any> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.v3+json',
     'User-Agent': 'DevMind-AI-Workspace',
+    'Content-Type': 'application/json',
   };
 
-  const finalToken = token || process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
-  if (finalToken) {
-    headers.Authorization = `token ${finalToken}`;
+  const token = process.env.GITHUB_TOKEN || process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+  if (token) {
+    headers.Authorization = `token ${token}`;
   }
 
-  const res = await fetch(url, { headers, next: { revalidate: 60 } }); // Cache for 1 minute
+  const res = await fetch(url, {
+    method: options.method ?? 'GET',
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    // Only cache safe GET reads — never cache a write request.
+    ...(options.method && options.method !== 'GET' ? {} : { next: { revalidate: 60 } }),
+  });
+
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
     throw new Error(`GitHub API Error (${res.status}): ${res.statusText}. ${errorBody}`);
   }
 
   return res.json();
+}
+
+async function listAllFilesViaTree(
+  owner: string,
+  repo: string,
+  defaultBranch?: string
+): Promise<RepoFile[]> {
+  const branchesToTry = [defaultBranch, 'main', 'master'].filter(
+    (b, i, arr): b is string => !!b && arr.indexOf(b) === i
+  );
+
+  for (const branch of branchesToTry) {
+    try {
+      const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+      const treeResult = await githubFetch(treeUrl);
+      const items = (treeResult.tree || []) as GitHubTreeItem[];
+
+      return items
+        .filter((item) => item.type === 'blob')
+        .slice(0, 500)
+        .map((item) => ({
+          name: item.path.split('/').pop() || item.path,
+          path: item.path,
+          type: 'file' as const,
+        }));
+    } catch {
+      continue;
+    }
+  }
+
+  console.warn(`[GitHubProvider] Could not list tree for ${owner}/${repo} on any of: ${branchesToTry.join(', ')}`);
+  return [];
 }
 
 export const GitHubProvider: RepositoryProvider = {
@@ -70,7 +118,6 @@ export const GitHubProvider: RepositoryProvider = {
     const { owner, repo } = config;
     if (!owner || !repo) throw new Error('owner and repo are required');
 
-    // Clean dirPath: make sure it doesn't start or end with slash
     const cleanPath = dirPath.replace(/^\/|\/$/g, '');
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${cleanPath}`;
 
@@ -82,7 +129,6 @@ export const GitHubProvider: RepositoryProvider = {
       size: item.size,
     }));
 
-    // Sort folders first, then files
     return result.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -102,17 +148,10 @@ export const GitHubProvider: RepositoryProvider = {
       throw new Error(`Path is not a file or has no content: ${filePath}`);
     }
 
-    // GitHub content is returned as base64 with newlines
     const contentBase64 = data.content.replace(/\n/g, '');
     return Buffer.from(contentBase64, 'base64').toString('utf-8');
   },
 
-  /**
-   * FIX: empty query now means "list every file in the repo" via the Git Trees API
-   * (one recursive call), instead of falling through to `if (!query.trim()) return [];`
-   * which is what made `listRepositoryFiles()` come back empty for every GitHub repo.
-   * Non-empty query still uses GitHub code search as before.
-   */
   async searchFiles(config: Record<string, string>, query: string): Promise<RepoFile[]> {
     const { owner, repo } = config;
     if (!owner || !repo) throw new Error('owner and repo are required');
@@ -121,8 +160,6 @@ export const GitHubProvider: RepositoryProvider = {
       return listAllFilesViaTree(owner, repo, config.defaultBranch);
     }
 
-    // Use GitHub code search API
-    // Note: This API can rate limit quickly if unauthenticated, so we limit search results and catch errors.
     try {
       const url = `https://api.github.com/search/code?q=${encodeURIComponent(query)}+repo:${owner}/${repo}`;
       const searchResult = await githubFetch(url);
@@ -138,44 +175,56 @@ export const GitHubProvider: RepositoryProvider = {
       return [];
     }
   },
-};
 
-/**
- * Lists every file in the repo in a single API call using the Git Trees API
- * (recursive=1), instead of walking directories one call at a time.
- * Falls back from the stored default branch to 'main' then 'master' if needed,
- * since `config.defaultBranch` may not be populated for repos connected before
- * this fix shipped.
- */
-async function listAllFilesViaTree(
-  owner: string,
-  repo: string,
-  defaultBranch?: string
-): Promise<RepoFile[]> {
-  const branchesToTry = [defaultBranch, 'main', 'master'].filter(
-    (b, i, arr): b is string => !!b && arr.indexOf(b) === i
-  );
+  // ── NEW: write support ────────────────────────────────────
 
-  for (const branch of branchesToTry) {
+  /**
+   * Writes (creates or updates) a file via the GitHub Contents API.
+   * GitHub requires the file's current `sha` when UPDATING an existing
+   * file (omitting it on an update fails with a 409 conflict) — so we
+   * first try to fetch the existing file to get its sha; a 404 there
+   * just means we're creating a brand-new file, which is fine.
+   */
+  async writeFile(
+    config: Record<string, string>,
+    filePath: string,
+    content: string,
+    commitMessage?: string
+  ): Promise<void> {
+    const { owner, repo } = config;
+    if (!owner || !repo) throw new Error('owner and repo are required');
+
+    const branch = config.defaultBranch || 'main';
+    const cleanPath = filePath.replace(/^\/|\/$/g, '');
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${cleanPath}`;
+
+    let sha: string | undefined;
     try {
-      const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
-      const treeResult = await githubFetch(treeUrl);
-      const items = (treeResult.tree || []) as GitHubTreeItem[];
-
-      return items
-        .filter((item) => item.type === 'blob') // files only, skip sub-tree entries
-        .slice(0, 500) // safety cap for very large repos
-        .map((item) => ({
-          name: item.path.split('/').pop() || item.path,
-          path: item.path,
-          type: 'file' as const,
-        }));
-    } catch (err) {
-      // Try the next candidate branch (e.g. defaultBranch 404s, fall back to 'main')
-      continue;
+      const existing = await githubFetch(`${url}?ref=${branch}`);
+      sha = existing.sha;
+    } catch {
+      // File doesn't exist yet on this branch — that's fine, we're creating it.
     }
-  }
 
-  console.warn(`[GitHubProvider] Could not list tree for ${owner}/${repo} on any of: ${branchesToTry.join(', ')}`);
-  return [];
-}
+    const body: Record<string, unknown> = {
+      message: commitMessage?.trim() || `Update ${cleanPath} via DevMind AI`,
+      content: Buffer.from(content, 'utf-8').toString('base64'),
+      branch,
+    };
+    if (sha) body.sha = sha; // required by GitHub when overwriting an existing file
+
+    await githubFetch(url, { method: 'PUT', body });
+  },
+
+  /**
+   * Git has no concept of an empty directory — a directory only "exists"
+   * if it contains at least one tracked file. So "create a directory" on
+   * GitHub means committing a placeholder file inside it. `.gitkeep` is
+   * the common convention; it has no special meaning to Git itself.
+   */
+  async createDirectory(config: Record<string, string>, dirPath: string): Promise<void> {
+    const cleanPath = dirPath.replace(/^\/|\/$/g, '');
+    const gitkeepPath = `${cleanPath}/.gitkeep`;
+    await GitHubProvider.writeFile(config, gitkeepPath, '', `Create directory ${cleanPath} via DevMind AI`);
+  },
+};
