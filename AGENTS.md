@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Currently a fully functional AI chat application with persistent conversation history. |
-| **Phase** | Phase 4 — Repository Integration |
+| **Phase** | Phase 5 — AI ↔ Repository Integration (Foundation) |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -492,7 +492,7 @@ User deletes conversation
 - [x] Conversations removed from Zustand persist (MongoDB is source of truth)
 - [x] Long conversation sliding window context limit (configurable)
 
-### Phase 4 — Repository Integration (In Progress)
+### Phase 4 — Repository Integration
 - [x] `ConnectedRepository` Mongoose model + MongoDB collection
 - [x] `RepositoryProvider` interface + `GitHubProvider` (GitHub REST API) + `LocalProvider` (Node.js fs)
 - [x] `repositoryService.ts` — connect, disconnect, list, browse, read, search
@@ -503,6 +503,13 @@ User deletes conversation
 - [x] `WorkspaceShell` fetches repos on mount (alongside conversations)
 - [x] `ConnectRepoModal` — animated dialog for GitHub (owner/repo or URL) and local path
 - [x] `RepositoryPanel` — live file tree, expandable folders, file preview, search, repo selector, disconnect
+
+### Phase 5 — AI ↔ Repository Integration (Foundation)
+- [x] Created `src/server/ai/tools.ts` to wrap existing repository tools
+- [x] Schema properties mapped to Vercel AI SDK `inputSchema` via `zod`
+- [x] Automated injection of `activeRepoId` on backend tool calls
+- [x] Configured multi-step loops using `stopWhen: isStepCount(5)` in `streamText`
+- [x] Passed client's `activeRepoId` in `ChatInterface` request payload to `/api/chat/stream`
 
 ---
 
@@ -622,4 +629,4 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-05 | Phase: 4 — Repository Integration (frontend wiring complete)*
+*Last Updated: 2026-07-06 | Phase: 5 — AI ↔ Repository Integration (Foundation)*

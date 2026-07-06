@@ -476,7 +476,7 @@ export function RepositoryPanel() {
                       }}
                       whileHover={{ borderColor: 'var(--color-accent-border)', color: 'var(--color-text-primary)' }}
                     >
-                      <FolderOpen size={11} style={{ color: 'var(--color-accent)' }} />
+                      <FolderOpen size={11} style={{ color: 'white' }} />
                       <span className="flex-1 truncate">{repo.name}</span>
                       <ArrowLeft size={10} style={{ transform: 'rotate(180deg)' }} />
                     </motion.button>

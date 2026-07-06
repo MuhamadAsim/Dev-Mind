@@ -28,9 +28,10 @@ export async function POST(req: NextRequest) {
       conversationId?: string | null;
       message: string;
       model?: string;
+      activeRepoId?: string | null;
     };
 
-    const { message, model } = body;
+    const { message, model, activeRepoId } = body;
     let { conversationId } = body;
 
     // ── Validate ──────────────────────────────────────────────
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
     // ── 5. Stream AI response ─────────────────────────────────
     console.log("AI Messages:");
     console.dir(aiMessages, { depth: null });
-    const textStream = await streamChat({ messages: aiMessages, model });
+    const textStream = await streamChat({ messages: aiMessages, model, activeRepoId });
 
     // Accumulate the full response so we can save it when done
     let fullContent = '';

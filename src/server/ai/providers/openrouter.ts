@@ -5,8 +5,9 @@
 // Switching to Anthropic/Gemini = a new file in this folder.
 // ============================================================
 import { createOpenAI } from '@ai-sdk/openai';
-import { streamText } from 'ai';
+import { streamText, isStepCount } from 'ai';
 import type { AIMessage, AIProvider, AIProviderConfig } from '../types';
+import { createRepositoryTools } from '../tools';
 
 export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
   // @ai-sdk/openai accepts any OpenAI-compatible baseURL
@@ -23,8 +24,12 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
     async stream(
       messages: AIMessage[],
       model: string,
-      instructions?: string
+      instructions?: string,
+      activeRepoId?: string | null
     ): Promise<ReadableStream<string>> {
+      // Register tools if there is an active repository connected.
+      const tools = activeRepoId ? createRepositoryTools(activeRepoId) : undefined;
+
       // FIX: this AI SDK version's streamText validates that NO message in
       // `messages` may have role 'system' — regardless of model type — and
       // requires the system prompt to go through the dedicated `instructions`
@@ -36,6 +41,8 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
         model: openrouter.chat(model),
         instructions,
         messages,
+        tools,
+        stopWhen: isStepCount(5), // Enable multi-step tool calls
       });
 
       // result.textStream is an AsyncIterable<string>; convert to ReadableStream<string>

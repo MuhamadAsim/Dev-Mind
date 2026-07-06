@@ -76,6 +76,8 @@ export interface StreamChatOptions {
   messages: AIMessage[];
   /** Override the default model for this request */
   model?: string;
+  /** Active repository ID selected in the UI */
+  activeRepoId?: string | null;
 }
 
 /**
@@ -113,7 +115,7 @@ export function truncateConversationContext(
  * @returns A ReadableStream of text chunks suitable for SSE streaming.
  */
 export async function streamChat(options: StreamChatOptions): Promise<ReadableStream<string>> {
-  const { messages, model = DEFAULT_MODEL } = options;
+  const { messages, model = DEFAULT_MODEL, activeRepoId } = options;
 
   // Apply the sliding window strategy to limit context sent to the provider.
   const truncatedMessages = truncateConversationContext(messages);
@@ -121,7 +123,7 @@ export async function streamChat(options: StreamChatOptions): Promise<ReadableSt
   // Prepend system prompt — invisible to the user but shapes AI behavior
   // Pass the system prompt separately as instructions.
   // Newer AI SDK versions don't allow system messages in `messages`.
-  return getProvider().stream(truncatedMessages, model, SYSTEM_PROMPT);
+  return getProvider().stream(truncatedMessages, model, SYSTEM_PROMPT, activeRepoId);
 }
 
 /** Expose the resolved default model (useful for displaying in the UI) */

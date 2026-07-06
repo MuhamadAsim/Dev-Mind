@@ -16,6 +16,7 @@ import {
   useReplaceConversationId,
   useLoadingMessageIds,
 } from '@/store/hooks/useChat';
+import { useActiveRepoId } from '@/store/hooks/useRepo';
 import { Conversation } from '@/types';
 
 // ── SSE event shapes from POST /api/chat/stream ───────────────
@@ -58,6 +59,7 @@ async function fetchConversationList(): Promise<Conversation[]> {
 export function ChatInterface() {
   const activeConversationId = useActiveConversationId();
   const activeConversation = useActiveConversation();
+  const activeRepoId = useActiveRepoId();
   const loadingMessageIds = useLoadingMessageIds();
   const addMessage = useAddMessage();
   const appendToMessage = useAppendToMessage();
@@ -98,6 +100,7 @@ export function ChatInterface() {
             // For a fresh local draft, tell the server to create a new one.
             conversationId: isNewConversation ? null : convId,
             message: content,
+            activeRepoId,
           }),
         });
 
@@ -177,6 +180,7 @@ export function ChatInterface() {
     [
       activeConversationId,
       activeConversation,
+      activeRepoId,
       addMessage,
       appendToMessage,
       updateMessage,

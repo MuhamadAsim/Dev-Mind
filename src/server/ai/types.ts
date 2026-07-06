@@ -26,7 +26,8 @@ export interface AIProvider {
   stream(
     messages: AIMessage[],
     model: string,
-    instructions?: string
+    instructions?: string,
+    activeRepoId?: string | null
   ): Promise<ReadableStream<string>>;
 }
 
