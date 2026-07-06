@@ -6,11 +6,10 @@
 // ============================================================
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, isStepCount } from 'ai';
-import type { AIMessage, AIProvider, AIProviderConfig } from '../types';
+import type { AIMessage, AIProvider, AIProviderConfig, ChatSession } from '../types';
 import { createRepositoryTools } from '../tools';
 
 export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
-  // @ai-sdk/openai accepts any OpenAI-compatible baseURL
   const openrouter = createOpenAI({
     apiKey: config.apiKey,
     baseURL: config.baseUrl ?? 'https://openrouter.ai/api/v1',
@@ -24,19 +23,16 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
     async stream(
       messages: AIMessage[],
       model: string,
-      instructions?: string,
-      activeRepoId?: string | null
+      instructions: string | undefined,
+      session: ChatSession
     ): Promise<ReadableStream<string>> {
-      // Register tools if there is an active repository connected.
-      const tools = activeRepoId ? createRepositoryTools(activeRepoId) : undefined;
+      // Tools are ALWAYS registered now — even with no active repo — so the
+      // LLM can call listConnectedRepos / selectRepo before touching any
+      // repo-content tool. `session` is shared by reference: if selectRepo
+      // fires mid-turn, session.activeRepoId changes and every tool called
+      // afterward (in this same 5-step loop) sees the new value.
+      const tools = createRepositoryTools(session);
 
-      // FIX: this AI SDK version's streamText validates that NO message in
-      // `messages` may have role 'system' — regardless of model type — and
-      // requires the system prompt to go through the dedicated `instructions`
-      // field instead. Our earlier attempt to pass `instructions` failed
-      // only because the model was still resolving to the Responses API
-      // accessor (openrouter(model)); now that we're correctly on
-      // openrouter.chat(model), `instructions` is the right mechanism.
       const result = await streamText({
         model: openrouter.chat(model),
         instructions,

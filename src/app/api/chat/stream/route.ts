@@ -2,13 +2,13 @@
 // POST /api/chat/stream
 //
 // Request body:
-//   { conversationId?: string | null; message: string; model?: string }
+//   { conversationId?: string | null; message: string; model?: string; activeRepoId?: string | null }
 //
 // Flow:
 //   1. Create conversation if needed
 //   2. Save user message to DB
 //   3. Load full history for context
-//   4. Stream AI response back to client (plain text chunks)
+//   4. Stream AI response back to client (SSE: meta → chunk* → [repoContext] → done)
 //   5. Save completed assistant message to DB after stream ends
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
 
     const { message, model, activeRepoId } = body;
     let { conversationId } = body;
+    const initialActiveRepoId = activeRepoId ?? null;
 
     // ── Validate ──────────────────────────────────────────────
     if (!message?.trim()) {
@@ -41,17 +42,13 @@ export async function POST(req: NextRequest) {
 
     // ── 1. Ensure conversation exists ─────────────────────────
     if (!conversationId) {
-      // Derive a title from the first message (truncate at 60 chars)
       const title = message.trim().length <= 60
         ? message.trim()
         : message.trim().slice(0, 57) + '…';
       const conv = await createConversation(title, model);
       conversationId = conv.id;
     } else {
-      // Verify it exists
-      console.log("Incoming conversationId:", conversationId);
       const existing = await getConversation(conversationId);
-      console.log("Conversation found:", existing);
       if (!existing) {
         return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
       }
@@ -68,23 +65,24 @@ export async function POST(req: NextRequest) {
     }));
 
     // ── 4. Create placeholder assistant message in DB ─────────
-    // We create it now with empty content so we have the ID to update later.
     const assistantMsgRecord = await addMessage(conversationId, 'assistant', 'Thinking...', {
       status: 'sending',
     });
 
     // ── 5. Stream AI response ─────────────────────────────────
-    console.log("AI Messages:");
-    console.dir(aiMessages, { depth: null });
-    const textStream = await streamChat({ messages: aiMessages, model, activeRepoId });
+    // NEW: streamChat returns { stream, session } instead of just a stream.
+    // `session` lets us detect, after streaming completes, whether a
+    // selectRepo/disconnectRepo tool call changed the active repo.
+    const { stream: textStream, session } = await streamChat({
+      messages: aiMessages,
+      model,
+      activeRepoId: initialActiveRepoId,
+    });
 
-    // Accumulate the full response so we can save it when done
     let fullContent = '';
 
     const responseStream = new ReadableStream({
       async start(controller) {
-        // Send the conversationId and assistantMessageId first as a metadata chunk
-        // so the client can link the stream to the correct conversation/message.
         const meta = JSON.stringify({
           type: 'meta',
           conversationId,
@@ -99,17 +97,26 @@ export async function POST(req: NextRequest) {
             if (done) break;
 
             fullContent += value;
-            // Stream each text chunk as an SSE data event
             controller.enqueue(
               new TextEncoder().encode(`data: ${JSON.stringify({ type: 'chunk', text: value })}\n\n`)
             );
           }
 
-          // Signal stream end
+          // NEW: if the LLM called selectRepo/disconnectRepo during this
+          // turn, session.activeRepoId now differs from what the client
+          // sent us — push that change back so the RepositoryPanel/dropdown
+          // updates automatically without a manual refresh.
+          if (session.activeRepoId !== initialActiveRepoId) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ type: 'repoContext', activeRepoId: session.activeRepoId })}\n\n`
+              )
+            );
+          }
+
           controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'done' })}\n\n`));
           controller.close();
         } catch (err) {
-          // Send error event to client
           controller.enqueue(
             new TextEncoder().encode(
               `data: ${JSON.stringify({ type: 'error', message: 'Stream interrupted.' })}\n\n`
@@ -119,7 +126,6 @@ export async function POST(req: NextRequest) {
           throw err;
         } finally {
           reader.releaseLock();
-          // ── 6. Persist completed assistant message ───────────
           await updateMessageContent(
             assistantMsgRecord.id,
             fullContent || '[No response]',
@@ -133,7 +139,7 @@ export async function POST(req: NextRequest) {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-transform',
-        'X-Accel-Buffering': 'no', // disable nginx buffering
+        'X-Accel-Buffering': 'no',
         Connection: 'keep-alive',
       },
     });

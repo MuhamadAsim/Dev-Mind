@@ -6,6 +6,7 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IConnectedRepository extends Document {
+  id: string; // ← ADD THIS — Mongoose's auto id virtual, needs explicit typing for TS
   name: string;
   type: 'github' | 'local';
   /**

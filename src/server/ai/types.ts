@@ -12,6 +12,27 @@ export interface AIMessage {
 }
 
 /**
+ * Mutable, per-request context threaded through every tool call in a turn.
+ *
+ * WHY THIS EXISTS: previously `activeRepoId` was passed as a plain string
+ * and baked into the tool definitions once, before streamText() ran. That
+ * broke the moment we needed a `selectRepo` tool — if the LLM picks a repo
+ * mid-conversation, tools created *before* that point were still frozen on
+ * the old value.
+ *
+ * By passing this object (not the string) into the provider and into
+ * createRepositoryTools(), every tool reads `session.activeRepoId` at
+ * execute() time instead of at creation time. `selectRepo`/`disconnectRepo`
+ * mutate it directly, so any tool called later in the SAME turn (your
+ * multi-step loop already supports 5 steps via stopWhen) sees the update
+ * immediately. route.ts also reads the final value after streaming ends,
+ * to tell the client the active repo changed.
+ */
+export interface ChatSession {
+  activeRepoId: string | null;
+}
+
+/**
  * Provider abstraction.
  * Every provider (OpenRouter, OpenAI, Anthropic, Gemini, Ollama, …)
  * must implement this interface.
@@ -19,15 +40,19 @@ export interface AIMessage {
 export interface AIProvider {
   /**
    * Stream a chat completion.
-   * @param messages  Full conversation history
-   * @param model     Model identifier (provider-specific string)
-   * @returns         A ReadableStream of text chunks
+   * @param messages     Full conversation history
+   * @param model        Model identifier (provider-specific string)
+   * @param instructions System prompt
+   * @param session      Mutable repo context — see ChatSession above.
+   *                     Replaces the old plain `activeRepoId?: string | null`
+   *                     param so tools can change it mid-turn.
+   * @returns            A ReadableStream of text chunks
    */
   stream(
     messages: AIMessage[],
     model: string,
-    instructions?: string,
-    activeRepoId?: string | null
+    instructions: string | undefined,
+    session: ChatSession
   ): Promise<ReadableStream<string>>;
 }
 
