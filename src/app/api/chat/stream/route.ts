@@ -1,16 +1,5 @@
 // ============================================================
 // POST /api/chat/stream
-//
-// Flow (extended with write-confirmation gate):
-//   1. Save user message to DB
-//   2. If this conversation has a PENDING write proposal:
-//        - "yes"/"confirm" → actually perform the write, in plain server
-//          code (NOT an LLM call), clear the pending state, respond.
-//        - "no"/"cancel"   → discard it, respond, no LLM call.
-//        - anything else   → fall through to the normal LLM turn so it
-//          can re-ask; pending state is left untouched.
-//   3. Otherwise: normal LLM turn. If the LLM staged a NEW proposal this
-//      turn (session.pendingWrite), persist it for the next message.
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { streamChat } from '@/server/ai/aiService';
@@ -26,12 +15,6 @@ import type { AIMessage } from '@/server/ai/types';
 
 export const runtime = 'nodejs';
 
-/**
- * Deterministic yes/no detection for the confirmation gate.
- * Intentionally simple keyword matching, NOT an LLM call — the whole point
- * of this gate is that it doesn't depend on model judgment. Extend these
- * lists as you notice real phrasings you use that don't match yet.
- */
 function detectConfirmation(message: string): 'confirm' | 'reject' | 'unclear' {
   const m = message.trim().toLowerCase().replace(/[.!]+$/, '');
   const confirmPhrases = ['yes', 'y', 'confirm', 'do it', 'proceed', 'go ahead', 'approved', 'ok', 'okay', 'sure', 'yes please'];
@@ -41,9 +24,6 @@ function detectConfirmation(message: string): 'confirm' | 'reject' | 'unclear' {
   return 'unclear';
 }
 
-/** Emits a single pre-written assistant message as an SSE stream, reusing
- *  the exact same event shape (meta/chunk/done) the client already parses —
- *  no ChatInterface.tsx changes needed for the confirm/cancel responses. */
 function streamPlainMessage(conversationId: string, assistantMessageId: string, text: string): Response {
   const stream = new ReadableStream({
     start(controller) {
@@ -82,7 +62,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Message is required.' }, { status: 400 });
     }
 
-    // ── Ensure conversation exists ─────────────────────────────
     if (!conversationId) {
       const title = message.trim().length <= 60 ? message.trim() : message.trim().slice(0, 57) + '…';
       const conv = await createConversation(title, model);
@@ -94,12 +73,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Save user message ──────────────────────────────────────
     await addMessage(conversationId, 'user', message.trim());
 
-    // ── Write-confirmation gate ─────────────────────────────────
-    // A brand-new conversation can never have a pending write, but a
-    // pre-existing one might — check before doing anything else.
     const pendingWrite = await getConversationPendingWrite(conversationId);
 
     if (pendingWrite) {
@@ -135,9 +110,7 @@ export async function POST(req: NextRequest) {
         const assistantMsg = await addMessage(conversationId, 'assistant', cancelText, { status: 'sent' });
         return streamPlainMessage(conversationId, assistantMsg.id, cancelText);
       }
-
-      // decision === 'unclear' → fall through to the normal LLM turn below
-      // so it can re-ask for clarification. pendingWrite stays as-is.
+      // 'unclear' falls through
     }
 
     // ── Normal LLM turn ──────────────────────────────────────────
@@ -151,7 +124,7 @@ export async function POST(req: NextRequest) {
       status: 'sending',
     });
 
-    const { stream: textStream, session } = await streamChat({
+    const { stream: partStream, session } = await streamChat({
       messages: aiMessages,
       model,
       activeRepoId: initialActiveRepoId,
@@ -168,15 +141,43 @@ export async function POST(req: NextRequest) {
         });
         controller.enqueue(new TextEncoder().encode(`data: ${meta}\n\n`));
 
-        const reader = textStream.getReader();
+        const reader = partStream.getReader();
         try {
           while (true) {
-            const { done, value } = await reader.read();
+            const { done, value: part } = await reader.read();
             if (done) break;
-            fullContent += value;
-            controller.enqueue(
-              new TextEncoder().encode(`data: ${JSON.stringify({ type: 'chunk', text: value })}\n\n`)
-            );
+
+            // CHANGED: part is now a typed ChatStreamPart, not a raw string.
+            if (part.type === 'text') {
+              fullContent += part.text;
+              controller.enqueue(
+                new TextEncoder().encode(`data: ${JSON.stringify({ type: 'chunk', text: part.text })}\n\n`)
+              );
+            } else if (part.type === 'tool-call') {
+              // NEW: surface the call to the client the moment it happens —
+              // don't wait for the whole turn to finish.
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    type: 'toolCall',
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    input: part.input,
+                  })}\n\n`
+                )
+              );
+            } else if (part.type === 'tool-result') {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({
+                    type: 'toolResult',
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    output: part.output,
+                  })}\n\n`
+                )
+              );
+            }
           }
 
           // Existing repo-context sync (selectRepo/disconnectRepo mid-turn)
@@ -188,8 +189,6 @@ export async function POST(req: NextRequest) {
             );
           }
 
-          // NEW: if the LLM staged a write proposal this turn, persist it —
-          // the NEXT user message will be checked against it above.
           if (session.pendingWrite) {
             await setConversationPendingWrite(conversationId, session.pendingWrite);
           }

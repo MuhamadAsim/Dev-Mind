@@ -198,6 +198,8 @@ export function createRepositoryTools(session: ChatSession) {
           .describe('Git commit message. Only used for GitHub repos; ignored for local repos.'),
       }),
       execute: async ({ filePath, content, commitMessage }) => {
+        console.log('[proposeFileWrite] raw content:', JSON.stringify(content).slice(0, 200));
+
         if (!session.activeRepoId) return NO_REPO_ERROR;
         const repo = await getRepoById(session.activeRepoId);
         if (!repo) return { error: 'Active repository no longer exists.' };

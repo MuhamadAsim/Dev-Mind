@@ -1,11 +1,11 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Bot, User, Copy, ThumbsUp, ThumbsDown, RotateCcw } from 'lucide-react';
+import { Bot, User, Copy, ThumbsUp, ThumbsDown, RotateCcw, Wrench, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatDate } from '@/lib/utils';
-import { Message } from '@/types';
+import { Message, ToolCallInfo } from '@/types/chat';
 
 interface MessageBubbleProps {
   message: Message;
@@ -40,10 +40,6 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
             border: '1px solid var(--color-accent-border)',
           }}
         >
-          {/* FIX (icon invisible in dark mode): was var(--color-accent),
-              which reads as a dim indigo on the dark gradient background.
-              --color-text-primary already flips white/black with theme
-              everywhere else in this file, so reuse it here too. */}
           <Bot size={14} style={{ color: 'var(--color-text-primary)' }} />
         </div>
       )}
@@ -67,6 +63,17 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
               }
           }
         >
+          {/* NEW: tool-call badges render above the text/streaming indicator,
+              in the order the tools were actually called. Only assistant
+              messages carry toolCalls (set by ChatInterface's SSE handler). */}
+          {message.toolCalls && message.toolCalls.length > 0 && (
+            <div className="mb-1.5 space-y-1">
+              {message.toolCalls.map((tc) => (
+                <ToolCallBadge key={tc.id} toolCall={tc} />
+              ))}
+            </div>
+          )}
+
           {message.isStreaming ? (
             <StreamingIndicator />
           ) : (
@@ -170,6 +177,58 @@ function StreamingIndicator() {
           transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
         />
       ))}
+    </div>
+  );
+}
+
+/* ── Tool Call Badge ─────────────────────────────────────────
+   One line per tool call, e.g. "🔧 Reading src/utils/helpers.ts".
+   Spinner while status === 'calling', wrench icon once it resolves
+   to 'done' (or 'error' — same icon for now, color could differ
+   later if you want to distinguish failed calls visually). */
+function summarizeToolCall(toolName: string, input: Record<string, unknown>): string {
+  switch (toolName) {
+    case 'readFile':
+      return `Reading ${input.filePath ?? 'file'}`;
+    case 'listDirectory':
+      return `Listing ${input.dirPath || 'root'}`;
+    case 'searchFiles':
+      return `Searching for "${input.query ?? ''}"`;
+    case 'selectRepo':
+      return `Selecting repo "${input.repoName ?? ''}"`;
+    case 'disconnectRepo':
+      return 'Deactivating repository';
+    case 'listConnectedRepos':
+      return 'Listing connected repositories';
+    case 'getRepositoryMetadata':
+      return 'Fetching repository metadata';
+    case 'getCurrentBranch':
+      return 'Checking current branch';
+    case 'getGitStatus':
+      return 'Checking git status';
+    case 'listRepositoryFiles':
+      return 'Listing all repository files';
+    case 'proposeFileWrite':
+      return `Proposing write to ${input.filePath ?? ''}`;
+    case 'proposeCreateDirectory':
+      return `Proposing new directory ${input.dirPath ?? ''}`;
+    default:
+      return toolName;
+  }
+}
+
+function ToolCallBadge({ toolCall }: { toolCall: ToolCallInfo }) {
+  return (
+    <div
+      className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md"
+      style={{ background: 'var(--color-bg-hover)', color: 'var(--color-text-muted)' }}
+    >
+      {toolCall.status === 'calling' ? (
+        <Loader2 size={10} className="animate-spin shrink-0" />
+      ) : (
+        <Wrench size={10} className="shrink-0" />
+      )}
+      <span className="truncate">{summarizeToolCall(toolCall.toolName, toolCall.input)}</span>
     </div>
   );
 }

@@ -1,12 +1,9 @@
 // ============================================================
 // OpenRouter Provider
-// Uses @ai-sdk/openai pointed at OpenRouter's OpenAI-compatible
-// endpoint. Switching to native OpenAI is a one-line baseURL change.
-// Switching to Anthropic/Gemini = a new file in this folder.
 // ============================================================
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, isStepCount } from 'ai';
-import type { AIMessage, AIProvider, AIProviderConfig, ChatSession } from '../types';
+import type { AIMessage, AIProvider, AIProviderConfig, ChatSession, ChatStreamPart } from '../types';
 import { createRepositoryTools } from '../tools';
 
 export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
@@ -25,12 +22,7 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
       model: string,
       instructions: string | undefined,
       session: ChatSession
-    ): Promise<ReadableStream<string>> {
-      // Tools are ALWAYS registered now — even with no active repo — so the
-      // LLM can call listConnectedRepos / selectRepo before touching any
-      // repo-content tool. `session` is shared by reference: if selectRepo
-      // fires mid-turn, session.activeRepoId changes and every tool called
-      // afterward (in this same 5-step loop) sees the new value.
+    ): Promise<ReadableStream<ChatStreamPart>> {
       const tools = createRepositoryTools(session);
 
       const result = await streamText({
@@ -38,17 +30,57 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
         instructions,
         messages,
         tools,
-        stopWhen: isStepCount(5), // Enable multi-step tool calls
+        stopWhen: isStepCount(5),
       });
 
-      // result.textStream is an AsyncIterable<string>; convert to ReadableStream<string>
-      return result.textStream.pipeThrough(
-        new TransformStream<string, string>({
-          transform(chunk, controller) {
-            controller.enqueue(chunk);
-          },
-        })
-      );
+      // CHANGED: previously piped result.textStream (text only — this is
+      // where tool-call visibility was being silently thrown away).
+      // fullStream carries text AND tool-call/tool-result parts, in the
+      // real order the model produced them.
+      return new ReadableStream<ChatStreamPart>({
+        async start(controller) {
+          try {
+            for await (const part of result.fullStream) {
+              // VERIFY: field names below assume AI SDK v5 (input/output).
+              // If nothing shows up client-side, add:
+              //   console.log('[openrouter] part:', part.type, part);
+              // here once, and adjust field names to match what you see.
+              switch (part.type) {
+                case 'text-delta':
+                  controller.enqueue({ type: 'text', text: part.text });
+                  break;
+
+                case 'tool-call':
+                  controller.enqueue({
+                    type: 'tool-call',
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    input: part.input as Record<string, unknown>,
+                  });
+                  break;
+
+                case 'tool-result':
+                  controller.enqueue({
+                    type: 'tool-result',
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    output: part.output,
+                  });
+                  break;
+
+                // 'start', 'finish', 'step-start', 'step-finish', etc. —
+                // internal bookkeeping we don't need to surface. Errors
+                // inside the stream throw and are caught below.
+                default:
+                  break;
+              }
+            }
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
+      });
     },
   };
 }

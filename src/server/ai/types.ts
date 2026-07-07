@@ -10,37 +10,32 @@ export interface AIMessage {
 
 /**
  * A staged (not-yet-applied) file write or directory creation.
- * Created by proposeFileWrite/proposeCreateDirectory tools, persisted to
- * the conversation's DB metadata by route.ts, and only ever turned into
- * a real filesystem/GitHub write by route.ts's confirmation gate — never
- * by an LLM tool call.
  */
 export interface PendingWrite {
   action: 'writeFile' | 'createDirectory';
   repoId: string;
   repoName: string;
-  /** Path relative to repo root */
   path: string;
-  /** Present only for 'writeFile' */
   content?: string;
-  /** GitHub commit message override; ignored for local repos */
   commitMessage?: string;
-  proposedAt: string; // ISO timestamp
+  proposedAt: string;
+}
+
+export interface ChatSession {
+  activeRepoId: string | null;
+  pendingWrite?: PendingWrite | null;
 }
 
 /**
- * Mutable, per-request context threaded through every tool call in a turn.
+ * NEW: one unit from the model's multi-step stream, normalized so
+ * route.ts doesn't need to know anything about the AI SDK's internal
+ * shapes. Text and tool activity travel through the SAME stream now,
+ * in the order they actually happened.
  */
-export interface ChatSession {
-  activeRepoId: string | null;
-  /**
-   * Set by proposeFileWrite/proposeCreateDirectory during a turn.
-   * route.ts reads this after streaming ends and persists it to the
-   * conversation's DB metadata, then checks it on the NEXT user message
-   * to decide whether to actually perform the write.
-   */
-  pendingWrite?: PendingWrite | null;
-}
+export type ChatStreamPart =
+  | { type: 'text'; text: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown };
 
 export interface AIProvider {
   stream(
@@ -48,7 +43,7 @@ export interface AIProvider {
     model: string,
     instructions: string | undefined,
     session: ChatSession
-  ): Promise<ReadableStream<string>>;
+  ): Promise<ReadableStream<ChatStreamPart>>; // CHANGED: was ReadableStream<string>
 }
 
 export interface AIProviderConfig {

@@ -4,6 +4,8 @@ import { useShallow } from 'zustand/react/shallow';
 
 export const useConversations = () => useStore((s) => s.conversations);
 export const useActiveConversationId = () => useStore((s) => s.activeConversationId);
+export const useAppendToolCall = () => useStore((s) => s.appendToolCall);
+export const useUpdateToolCallResult = () => useStore((s) => s.updateToolCallResult);
 export const useActiveConversation = () =>
   useStore(
     useShallow((s) =>

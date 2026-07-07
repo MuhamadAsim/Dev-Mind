@@ -1,39 +1,35 @@
-// ============================================================
-// Chat Slice — conversations, messages, active thread
-// Phase 2 additions:
-//   - setConversations()       bulk-load from API on mount
-//   - appendToMessage()        append streaming chunk to a message
-//   - Conversations no longer persist to localStorage (MongoDB is source of truth)
-// ============================================================
 import { StateCreator } from 'zustand';
-import { Conversation, Message, MessageRole } from '@/types/chat';
+import { Conversation, Message, MessageRole, ToolCallInfo } from '@/types/chat';
 import { generateId } from '@/lib/utils';
 import type { RootStore } from '../index';
 
 export interface ChatSlice {
-  // State
   conversations: Conversation[];
   activeConversationId: string | null;
-  /** Conversation ids currently fetching their messages (lazy-load in Sidebar) */
   loadingMessageIds: Set<string>;
 
-  // Actions
-  /** Bulk-replace the conversation list (called after API fetch on mount) */
   setConversations: (conversations: Conversation[]) => void;
-  /** Insert a conversation if it doesn't already exist (used for server-created convs) */
   upsertConversation: (conversation: Conversation) => void;
-  /** Mark a conversation's messages as loading/not-loading, for UI spinners */
   setMessagesLoading: (id: string, loading: boolean) => void;
 
   createConversation: (firstMessage?: string) => Conversation;
   setActiveConversation: (id: string | null) => void;
   replaceConversationId: (oldId: string, newId: string) => void;
 
-
   addMessage: (conversationId: string, role: MessageRole, content: string) => Message;
   updateMessage: (conversationId: string, messageId: string, patch: Partial<Message>) => void;
-  /** Append a streaming text chunk to an existing message's content */
   appendToMessage: (conversationId: string, messageId: string, chunk: string) => void;
+
+  // NEW — tool-call visibility
+  appendToolCall: (conversationId: string, messageId: string, toolCall: ToolCallInfo) => void;
+  updateToolCallResult: (
+    conversationId: string,
+    messageId: string,
+    toolCallId: string,
+    output: unknown,
+    status?: 'done' | 'error'
+  ) => void;
+
   deleteConversation: (id: string) => void;
   pinConversation: (id: string, pinned: boolean) => void;
   renameConversation: (id: string, title: string) => void;
@@ -60,29 +56,17 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
     });
   },
 
-  // ── Phase 2: bulk-load from API ───────────────────────────
-  // NOTE: this is reused for two different call sites:
-  //  1) WorkspaceShell's initial bulk list load — incoming conversations
-  //     never include messages (list endpoint doesn't return them), so we
-  //     must preserve whatever's already loaded in memory.
-  //  2) Sidebar's lazy per-conversation message load — incoming DOES
-  //     include real messages for the selected conversation, and those
-  //     must win, not be discarded in favor of stale local state.
-  // Only fall back to the existing in-memory messages when incoming has
-  // none at all; otherwise trust what was just passed in.
   setConversations: (conversations) =>
     set((state) => ({
       conversations: conversations.map((incoming) => {
-        const existing = state.conversations.find(
-          (c) => c.id === incoming.id
-        );
-
+        const existing = state.conversations.find((c) => c.id === incoming.id);
         if (existing && incoming.messages.length === 0) {
           return { ...incoming, messages: existing.messages };
         }
         return incoming;
       }),
     })),
+
   upsertConversation: (conversation) =>
     set((s) => {
       const exists = s.conversations.some((c) => c.id === conversation.id);
@@ -96,8 +80,6 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
   createConversation: (firstMessage?: string) => {
     const now = new Date().toISOString();
     const conversation: Conversation = {
-      // Prefixed so a local draft id can NEVER collide with a real Mongo
-      // ObjectId once it gets replaced below.
       id: `local_${generateId()}`,
       title: firstMessage ? deriveTitle(firstMessage) : 'New conversation',
       messages: [],
@@ -105,7 +87,7 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
       updatedAt: now,
       tags: [],
       isPinned: false,
-      isSynced: false, // not saved to Mongo yet
+      isSynced: false,
     };
     set((s) => ({
       conversations: [conversation, ...s.conversations],
@@ -152,16 +134,13 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
         c.id === conversationId
           ? {
             ...c,
-            messages: c.messages.map((m) =>
-              m.id === messageId ? { ...m, ...patch } : m
-            ),
+            messages: c.messages.map((m) => (m.id === messageId ? { ...m, ...patch } : m)),
           }
           : c
       ),
     }));
   },
 
-  // ── Phase 2: streaming chunk append ──────────────────────
   appendToMessage: (conversationId, messageId, chunk) => {
     set((s) => ({
       conversations: s.conversations.map((c) =>
@@ -169,8 +148,47 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
           ? {
             ...c,
             messages: c.messages.map((m) =>
+              m.id === messageId ? { ...m, content: m.content + chunk } : m
+            ),
+          }
+          : c
+      ),
+    }));
+  },
+
+  // NEW — appends a fresh tool-call entry (status: 'calling') to the message
+  appendToolCall: (conversationId, messageId, toolCall) => {
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === conversationId
+          ? {
+            ...c,
+            messages: c.messages.map((m) =>
               m.id === messageId
-                ? { ...m, content: m.content + chunk }
+                ? { ...m, toolCalls: [...(m.toolCalls ?? []), toolCall] }
+                : m
+            ),
+          }
+          : c
+      ),
+    }));
+  },
+
+  // NEW — patches the matching tool-call entry once its result arrives
+  updateToolCallResult: (conversationId, messageId, toolCallId, output, status = 'done') => {
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === conversationId
+          ? {
+            ...c,
+            messages: c.messages.map((m) =>
+              m.id === messageId
+                ? {
+                  ...m,
+                  toolCalls: (m.toolCalls ?? []).map((tc) =>
+                    tc.id === toolCallId ? { ...tc, output, status } : tc
+                  ),
+                }
                 : m
             ),
           }
@@ -185,25 +203,19 @@ export const createChatSlice: StateCreator<RootStore, [], [], ChatSlice> = (set,
     set({
       conversations: remaining,
       activeConversationId:
-        activeConversationId === id
-          ? remaining[0]?.id ?? null
-          : activeConversationId,
+        activeConversationId === id ? remaining[0]?.id ?? null : activeConversationId,
     });
   },
 
   pinConversation: (id, pinned) => {
     set((s) => ({
-      conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, isPinned: pinned } : c
-      ),
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, isPinned: pinned } : c)),
     }));
   },
 
   renameConversation: (id, title) => {
     set((s) => ({
-      conversations: s.conversations.map((c) =>
-        c.id === id ? { ...c, title } : c
-      ),
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, title } : c)),
     }));
   },
 
