@@ -105,7 +105,7 @@ export function TopBar() {
         id="model-selector-btn"
       >
         <Cpu size={12} />
-        <span className="font-medium">DevMind Mock v1</span>
+        <span className="font-medium">DevMind v1</span>
         <ChevronDown size={11} />
       </motion.button>
 

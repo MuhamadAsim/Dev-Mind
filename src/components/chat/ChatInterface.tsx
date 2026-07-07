@@ -16,7 +16,11 @@ import {
   useReplaceConversationId,
   useLoadingMessageIds,
 } from '@/store/hooks/useChat';
-import { useActiveRepoId } from '@/store/hooks/useRepo';
+import {
+  useActiveRepoId,
+  useSetActiveRepoId,
+  useFetchConnectedRepos,
+} from '@/store/hooks/useRepo';
 import { Conversation } from '@/types';
 
 // ── SSE event shapes from POST /api/chat/stream ───────────────
@@ -24,7 +28,11 @@ type StreamMeta = { type: 'meta'; conversationId: string; assistantMessageId: st
 type StreamChunk = { type: 'chunk'; text: string };
 type StreamDone = { type: 'done' };
 type StreamError = { type: 'error'; message: string };
-type StreamEvent = StreamMeta | StreamChunk | StreamDone | StreamError;
+// Server tells us the AI activated/deactivated a repo mid-turn
+// (emitted by route.ts whenever session.activeRepoId changes from the
+// value the client sent in — see selectRepo/disconnectRepo tools).
+type StreamRepoContext = { type: 'repoContext'; activeRepoId: string | null };
+type StreamEvent = StreamMeta | StreamChunk | StreamDone | StreamError | StreamRepoContext;
 
 // ── Sidebar reload helper ─────────────────────────────────────
 async function fetchConversationList(): Promise<Conversation[]> {
@@ -67,6 +75,12 @@ export function ChatInterface() {
   const setConversations = useSetConversations();
   const createConversation = useCreateConversation();
   const replaceConversationId = useReplaceConversationId();
+
+  // NEW: needed to sync Zustand when the AI switches/clears the active
+  // repo mid-turn (selectRepo / disconnectRepo tools). Without these two,
+  // the server-side repoContext event has nowhere to land on the client.
+  const setActiveRepoId = useSetActiveRepoId();
+  const refreshConnectedRepos = useFetchConnectedRepos();
 
   const [isLoading, setIsLoading] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -167,6 +181,21 @@ export function ChatInterface() {
                   content: '⚠ Something went wrong. Please try again.',
                 });
               }
+
+            } else if (event.type === 'repoContext') {
+              // NEW: the AI called selectRepo/disconnectRepo mid-turn.
+              // Only act if it's actually different from what we already
+              // have, to avoid redundant fetches on every message.
+              if (event.activeRepoId !== activeRepoId) {
+                // Refresh the connected-repos list FIRST — covers the case
+                // where disconnectRepo ran and removed an entry from Mongo
+                // that our local `connectedRepos` array doesn't know about
+                // yet. Only after that do we activate the new repo, so
+                // setActiveRepoId() can actually find it in the fresh list.
+                refreshConnectedRepos().then(() => {
+                  setActiveRepoId(event.activeRepoId);
+                });
+              }
             }
           }
         }
@@ -187,6 +216,8 @@ export function ChatInterface() {
       setConversations,
       createConversation,
       replaceConversationId,
+      setActiveRepoId,        // NEW
+      refreshConnectedRepos,  // NEW
     ]
   );
 

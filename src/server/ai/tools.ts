@@ -10,7 +10,6 @@ import {
   searchFiles,
   listAllConnectedRepos,
   getRepoById,
-  disconnectRepoById,
 } from '../repos/repositoryTools';
 import type { ChatSession } from './types';
 
@@ -58,28 +57,31 @@ export function createRepositoryTools(session: ChatSession) {
       },
     }),
 
+    // NOTE: This is a SESSION-ONLY deactivation. It clears which repo the
+    // AI is currently pointed at for this conversation — it does NOT
+    // delete the repository connection. The repo stays in the user's
+    // connected list and can be reselected later via selectRepo, or from
+    // the Repository panel in the UI. Permanent removal (deleting the DB
+    // record) is only ever done through the trash-icon button in
+    // RepositoryPanel.tsx — never from chat.
     disconnectRepo: tool({
       description:
-        'Disconnect a repository. Pass "current" to disconnect whichever repo is active right now, or a repo name to disconnect a specific one.',
-      inputSchema: z.object({
-        repoName: z.string().describe('Repo name to disconnect, or the literal word "current".'),
-      }),
-      execute: async ({ repoName }) => {
-        const isCurrent = repoName.trim().toLowerCase() === 'current';
-        const targetId = isCurrent ? session.activeRepoId : (await findRepoByName(repoName))?.id ?? null;
-
-        if (!targetId) {
-          return { error: `Could not find a connected repository matching "${repoName}".` };
+        'Deactivate the currently active repository for this conversation, so file tools no longer target it. This does NOT delete or remove the repository connection — it stays available and can be reselected later with selectRepo, or from the Repository panel in the app. Only use this when the user asks to "stop working on" / "unset" / "disconnect from" the current repo in this chat.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        if (!session.activeRepoId) {
+          return { error: 'No repository is currently active in this conversation.' };
         }
 
-        const repo = await getRepoById(targetId);
-        await disconnectRepoById(targetId);
+        const repo = await getRepoById(session.activeRepoId);
+        const deactivatedName = repo?.name ?? 'the active repository';
+        session.activeRepoId = null;
 
-        if (session.activeRepoId === targetId) {
-          session.activeRepoId = null;
-        }
-
-        return { success: true, disconnectedName: repo?.name ?? repoName };
+        return {
+          success: true,
+          deactivatedName,
+          note: 'The repository connection itself was NOT removed — it is still available and can be reselected.',
+        };
       },
     }),
 
