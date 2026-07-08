@@ -131,6 +131,29 @@ export async function searchRepositoryFiles(id: string, query: string): Promise<
   return provider.searchFiles(repo.config, query);
 }
 
+/** Lists files in the repository recursively */
+export async function listRepositoryFiles(id: string): Promise<RepoFile[]> {
+  return searchRepositoryFiles(id, '');
+}
+
+/** Read multiple files in bulk. Returns { supported: false } if the provider does not support bulk reads. */
+export async function readRepositoryFilesBulk(
+  id: string,
+  filePaths: string[]
+): Promise<{ supported: boolean; contents?: Map<string, string> }> {
+  const repo = await getRepository(id);
+  if (!repo) throw new Error(`Repository not found: ${id}`);
+
+  const provider = getProvider(repo.type);
+  if (!provider.readFilesBulk) {
+    return { supported: false };
+  }
+
+  const contents = await provider.readFilesBulk(repo.config, filePaths);
+  return { supported: true, contents };
+}
+
+
 // ── NEW: write support — dispatch only, same pattern as reads above ──
 
 /** Write (create/overwrite) a file. Only ever call this AFTER user confirmation. */

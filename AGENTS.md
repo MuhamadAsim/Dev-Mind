@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Currently a fully functional AI chat application with persistent conversation history. |
-| **Phase** | Phase 5 — AI ↔ Repository Integration (Foundation) |
+| **Phase** | Phase 6 — Repository Intelligence Foundation (Local Repositories Only) |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -37,6 +37,7 @@
 | AI Provider | `@ai-sdk/openai` | latest | OpenAI-compatible — pointed at OpenRouter |
 | Database | MongoDB | Atlas or local | Via Mongoose ODM |
 | ODM | Mongoose | latest | Two collections: Conversation + Message |
+| AST Parser | ts-morph | latest | In-memory code parsing, local tsconfig-aware |
 
 ---
 
@@ -201,6 +202,17 @@ src/
 │   │       ├── Message.ts               # Mongoose schema — separate collection
 │   │       ├── ConnectedRepository.ts   # Mongoose schema — connected repos
 │   │       └── index.ts                 # Barrel export
+│   ├── intelligence/                    # Repository intelligence indexing layer (Phase 6)
+│   │   ├── types.ts                     # Parser-agnostic intelligence data models
+│   │   ├── store/
+│   │   │   ├── repositoryAstStore.ts    # Global ts-morph Project cache
+│   │   │   └── repositoryIndexStore.ts  # Global race-safe RepositoryKnowledge promise cache
+│   │   ├── services/
+│   │   │   ├── repositoryIndexer.ts     # Scans and filters files in repository
+│   │   │   ├── typescriptIndexer.ts     # In-memory ts-morph single-pass indexer
+│   │   │   ├── repositoryKnowledgeBuilder.ts # Orchestrates indexers into RepositoryKnowledge
+│   │   │   └── repositorySearch.ts      # Read-only search helper interface
+│   │   └── index.ts                     # Barrel export (exposes only stores and search)
 │   └── repos/
 │       ├── types.ts                     # RepoFile, RepositoryMetadata, RepositoryProvider interface
 │       ├── repositoryService.ts         # connectRepository, listDirectory, readFile, searchFiles
@@ -504,12 +516,15 @@ User deletes conversation
 - [x] `ConnectRepoModal` — animated dialog for GitHub (owner/repo or URL) and local path
 - [x] `RepositoryPanel` — live file tree, expandable folders, file preview, search, repo selector, disconnect
 
-### Phase 5 — AI ↔ Repository Integration (Foundation)
-- [x] Created `src/server/ai/tools.ts` to wrap existing repository tools
-- [x] Schema properties mapped to Vercel AI SDK `inputSchema` via `zod`
-- [x] Automated injection of `activeRepoId` on backend tool calls
-- [x] Configured multi-step loops using `stopWhen: isStepCount(5)` in `streamText`
-- [x] Passed client's `activeRepoId` in `ChatInterface` request payload to `/api/chat/stream`
+### Phase 6 — Repository Intelligence Foundation
+- [x] Provider-agnostic Repository Intelligence architecture (`src/server/intelligence/`)
+- [x] In-memory, non-disk AST parsing of TypeScript and JavaScript via `ts-morph`
+- [x] TSConfig-aware module resolution and path alias mapping for local repositories
+- [x] Single-pass file scanning for symbols (functions, classes, components, enums, etc.) and imports
+- [x] Double-reload safe memory stores for caching parsed AST projects and built knowledge
+- [x] Safe lazy indexing integration inside the AI chat request pipeline (`streamChat`)
+- [x] Read-only search API for querying file paths, names, extensions, symbols, and dependencies
+- [x] Graceful fallback to legacy search for remote GitHub repositories (deferred to Phase 6.1)
 
 ---
 

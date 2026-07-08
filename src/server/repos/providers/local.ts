@@ -148,6 +148,17 @@ export const LocalProvider: RepositoryProvider = {
     return matches;
   },
 
+  async readFilesBulk(config: Record<string, string>, filePaths: string[]): Promise<Map<string, string>> {
+    const results = new Map<string, string>();
+    await Promise.all(
+      filePaths.map(async (filePath) => {
+        const content = await this.readFile(config, filePath);
+        results.set(filePath, content);
+      })
+    );
+    return results;
+  },
+
   // ── NEW: write support ────────────────────────────────────
 
   async writeFile(config: Record<string, string>, filePath: string, content: string): Promise<void> {

@@ -12,6 +12,7 @@ import {
   getRepository,
   listConnectedRepositories,
   disconnectRepository,
+  listRepositoryFiles as listRepositoryFilesService,
 } from './repositoryService';
 import { RepoFile, RepositoryMetadata } from './types';
 import { IConnectedRepository } from '../db/models/ConnectedRepository';
@@ -49,7 +50,7 @@ export async function getGitStatus(repoId: string): Promise<string> {
 
 /** Lists files in the repository (e.g. searching with empty/wildcard queries) */
 export async function listRepositoryFiles(repoId: string): Promise<RepoFile[]> {
-  return searchRepositoryFiles(repoId, '');
+  return listRepositoryFilesService(repoId);
 }
 
 /** Searches for files matching the given query inside the repository */

@@ -3,6 +3,7 @@
 // ============================================================
 import type { AIMessage, AIProvider, ChatSession, ChatStreamPart } from './types';
 import { createOpenRouterProvider } from './providers/openrouter';
+import { getOrBuildRepositoryKnowledge } from '../intelligence';
 
 const SYSTEM_PROMPT = `You are DevMind AI, a personal AI software engineering assistant.
 You help developers write, understand, debug, review, and improve code.
@@ -76,6 +77,18 @@ export async function streamChat(options: StreamChatOptions): Promise<StreamChat
   const { messages, model = DEFAULT_MODEL, activeRepoId = null } = options;
   const truncatedMessages = truncateConversationContext(messages);
   const session: ChatSession = { activeRepoId };
+
+  if (activeRepoId) {
+    try {
+      await getOrBuildRepositoryKnowledge(activeRepoId);
+    } catch (err: any) {
+      console.warn(
+        `[aiService] Lazy repository indexing failed for "${activeRepoId}", continuing without index:`,
+        err.message || err
+      );
+    }
+  }
+
   const stream = await getProvider().stream(truncatedMessages, model, SYSTEM_PROMPT, session);
   return { stream, session };
 }

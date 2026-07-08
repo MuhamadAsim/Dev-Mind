@@ -30,7 +30,7 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
         instructions,
         messages,
         tools,
-        stopWhen: isStepCount(5),
+        stopWhen: isStepCount(15),
       });
 
       // CHANGED: previously piped result.textStream (text only — this is

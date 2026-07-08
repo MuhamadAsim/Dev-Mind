@@ -42,6 +42,12 @@ export interface RepositoryProvider {
   /** Read file content */
   readFile(config: Record<string, string>, filePath: string): Promise<string>;
 
+  /** Read multiple files in bulk (optional) */
+  readFilesBulk?(
+    config: Record<string, string>,
+    filePaths: string[]
+  ): Promise<Map<string, string>>;
+
   /** Search for files in the repository matching the query */
   searchFiles(config: Record<string, string>, query: string): Promise<RepoFile[]>;
 
