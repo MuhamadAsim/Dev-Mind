@@ -12,6 +12,8 @@ import {
   getRepoById,
 } from '../repos/repositoryTools';
 import type { ChatSession } from './types';
+import { contextService } from '../context/contextService';
+import { McpGraphClient } from '../context/graphClient';
 
 const NO_REPO_ERROR = {
   error:
@@ -253,4 +255,99 @@ export function createRepositoryTools(session: ChatSession) {
       },
     }),
   };
+}
+
+function jsonSchemaToZod(schema: any): z.ZodTypeAny {
+  if (!schema) return z.object({});
+
+  if (schema.type === 'object') {
+    const shape: Record<string, z.ZodTypeAny> = {};
+    const properties = schema.properties || {};
+    const required = schema.required || [];
+
+    for (const key of Object.keys(properties)) {
+      const prop = properties[key];
+      let fieldSchema: z.ZodTypeAny;
+
+      if (prop.type === 'string') {
+        fieldSchema = z.string();
+      } else if (prop.type === 'number' || prop.type === 'integer') {
+        fieldSchema = z.number();
+      } else if (prop.type === 'boolean') {
+        fieldSchema = z.boolean();
+      } else if (prop.type === 'array') {
+        const itemsSchema = prop.items ? jsonSchemaToZod(prop.items) : z.any();
+        fieldSchema = z.array(itemsSchema);
+      } else {
+        fieldSchema = z.any();
+      }
+
+      if (prop.description) {
+        fieldSchema = fieldSchema.describe(prop.description);
+      }
+
+      if (!required.includes(key)) {
+        fieldSchema = fieldSchema.optional();
+      }
+
+      shape[key] = fieldSchema;
+    }
+
+    return z.object(shape);
+  }
+
+  return z.any();
+}
+
+export async function createContextTools(session: ChatSession): Promise<Record<string, any>> {
+  if (!session.activeRepoId) return {};
+
+  const isSupported = await contextService.supportsGraphify(session.activeRepoId);
+  if (!isSupported) return {};
+
+  // Check if Graphify is indexed and online
+  const statusResult = await contextService.getGraph().getGraphStatus(session.activeRepoId);
+  if (statusResult.status !== 'indexed') {
+    console.log(`[createContextTools] Graphify is not available for active repo: status is ${statusResult.status} (${statusResult.message || ''})`);
+    return {};
+  }
+
+  try {
+    const client = new McpGraphClient();
+    await client.connect();
+
+    const toolsResult = await client.listTools();
+    await client.close();
+
+    const mcpTools = toolsResult.tools || [];
+    const registeredTools: Record<string, any> = {};
+
+    for (const mcpTool of mcpTools) {
+      registeredTools[mcpTool.name] = tool({
+        description: mcpTool.description || `Exposed by Graphify MCP server.`,
+        inputSchema: jsonSchemaToZod(mcpTool.inputSchema),
+        execute: async (args: any) => {
+          const runClient = new McpGraphClient();
+          try {
+            await runClient.connect();
+            const res = await runClient.callTool(mcpTool.name, args as Record<string, unknown>);
+            return {
+              result: res.content?.[0]?.text || '',
+            };
+          } catch (err: any) {
+            return {
+              error: err.message || String(err),
+            };
+          } finally {
+            await runClient.close();
+          }
+        },
+      });
+    }
+
+    return registeredTools;
+  } catch (error) {
+    console.warn('[createContextTools] Failed to load tools from Graphify MCP server:', error);
+    return {};
+  }
 }

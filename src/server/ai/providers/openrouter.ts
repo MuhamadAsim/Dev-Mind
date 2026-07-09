@@ -4,7 +4,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, isStepCount } from 'ai';
 import type { AIMessage, AIProvider, AIProviderConfig, ChatSession, ChatStreamPart } from '../types';
-import { createRepositoryTools } from '../tools';
+import { createRepositoryTools, createContextTools } from '../tools';
 
 export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
   const openrouter = createOpenAI({
@@ -23,14 +23,16 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
       instructions: string | undefined,
       session: ChatSession
     ): Promise<ReadableStream<ChatStreamPart>> {
-      const tools = createRepositoryTools(session);
+      const repoTools = createRepositoryTools(session);
+      const contextTools = await createContextTools(session);
+      const tools = { ...repoTools, ...contextTools };
 
       const result = await streamText({
         model: openrouter.chat(model),
         instructions,
         messages,
         tools,
-        stopWhen: isStepCount(5),
+        stopWhen: isStepCount(12),
       });
 
       // CHANGED: previously piped result.textStream (text only — this is

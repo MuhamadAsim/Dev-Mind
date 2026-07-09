@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Currently a fully functional AI chat application with persistent conversation history. |
-| **Phase** | Phase 5 — AI ↔ Repository Integration (Foundation) |
+| **Phase** | Phase 6 — Graphify Repository Context Integration |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -37,6 +37,8 @@
 | AI Provider | `@ai-sdk/openai` | latest | OpenAI-compatible — pointed at OpenRouter |
 | Database | MongoDB | Atlas or local | Via Mongoose ODM |
 | ODM | Mongoose | latest | Two collections: Conversation + Message |
+| Graph Context | Graphify (`graphifyy[mcp]`) | latest | Knowledge graph MCP server for local repos |
+| MCP Client | `@modelcontextprotocol/sdk` | latest | Official SSE/Streamable-HTTP client for Graphify |
 
 ---
 
@@ -117,6 +119,67 @@ User → API Route → AI Service → AI Provider → OpenRouter/OpenAI-compatib
 - **`src/server/ai/providers/openrouter.ts`**: OpenRouter implementation using `@ai-sdk/openai` pointed at `https://openrouter.ai/api/v1`.
 - **To add a new provider**: Create `src/server/ai/providers/<name>.ts`, add a `case` in `aiService.ts`, set `ACTIVE_AI_PROVIDER` env var.
 - The Vercel AI SDK `useChat` hook is **intentionally not used** — Zustand manages all state.
+
+### 11. Context Layer Architecture (Phase 6)
+
+```
+AI Service
+    │
+    ▼
+Context Service
+    │
+    ├──────── Repository Service (Local / GitHub filesystem)
+    │
+    └──────── Graph Service (Codebase semantic understanding)
+                 │
+                 ▼
+          McpGraphClient (@modelcontextprotocol/sdk)
+                 │
+                 ▼
+          Graphify MCP Server (HTTP/SSE on GRAPHIFY_MCP_URL)
+```
+
+**Key rules:**
+- `ContextService` is the only entry point for the rest of DevMind to access semantic context.
+- `GraphService` exposes domain-level methods; nothing outside `src/server/context/` ever knows about Graphify MCP tool names.
+- `McpGraphClient` wraps the official `@modelcontextprotocol/sdk` `Client` + `SSEClientTransport`.
+- Graphify is only supported for **LocalProvider** repositories. GitHub repos skip the context layer silently.
+- If the Graphify server is offline, unreachable, or the graph is not yet indexed, `GraphService` returns a structured `GraphStatusResult` and all context tools are skipped — the rest of DevMind falls back to standard repo tools transparently.
+- Indexing state is determined exclusively from MCP server responses, **never** from inspecting local file paths.
+
+**`src/server/context/` module summary:**
+
+| File | Purpose |
+|---|---|
+| `types.ts` | `ContextQueryResult`, `DependencyRelation`, `SymbolRelationship`, `CallHierarchy`, `GraphCapabilities`, `GraphStatusResult` |
+| `graphClient.ts` | `McpGraphClient` — connects to MCP server, exposes `listTools()` and `callTool()` with `McpToolResult` type |
+| `graphService.ts` | Domain methods: `explainArchitecture`, `findRelevantFiles`, `findDependencies`, `findRelatedSymbols`, `findCallHierarchy`, `findEntryPoints`, `getCapabilities`, `getGraphStatus` |
+| `contextService.ts` | `ContextService` singleton — determines LocalProvider support, routes to `GraphService` |
+| `verify-graph.ts` | Dev-time verification script: connect → listTools → getGraphStatus |
+
+**Graphify MCP Tools (verified from `serve.py` source):**
+
+| MCP Tool | GraphService Method | Description |
+|---|---|---|
+| `query_graph` | `findRelevantFiles` | BFS/DFS traversal — returns nodes + edges as text |
+| `get_node` | `findRelatedSymbols` | Details for a node by label/ID |
+| `get_neighbors` | `findDependencies`, `findCallHierarchy`, `findRelatedSymbols` | Direct neighbors with edge metadata |
+| `get_community` | (direct) | All nodes in a community by ID |
+| `god_nodes` | `explainArchitecture`, `findEntryPoints` | Most-connected nodes (core abstractions) |
+| `graph_stats` | `explainArchitecture`, `getGraphStatus` | Graph statistics (nodes, edges, communities) |
+| `shortest_path` | (direct) | Shortest path between two concepts |
+
+**AI Tool Registration:**
+- `createContextTools(session)` in `src/server/ai/tools.ts` is called alongside `createRepositoryTools(session)` before every `streamText` call.
+- It connects to the MCP server, calls `listTools()`, converts JSON Schema to Zod via `jsonSchemaToZod()`, and registers each tool dynamically.
+- If Graphify is offline or the repo is GitHub-type, `createContextTools` returns `{}` with no error.
+- All AI tool execution goes: LLM tool call → AI Tool → `McpGraphClient.callTool()` → Graphify MCP Server.
+
+**Runtime system prompt** (in `aiService.ts`) instructs the LLM to:
+1. Prefer semantic discovery (graph tools) before broad file reads.
+2. Use `query_graph`, `get_node`, `god_nodes`, etc. to understand architecture, dependencies, symbols first.
+3. Only read file contents via `readFile` once relevant locations are identified.
+4. Fall back to `searchFiles` / `listDirectory` if Graphify is unavailable or not indexed.
 
 ### 8. Database Architecture (Phase 2 + 4)
 Three separate MongoDB collections:
@@ -201,6 +264,12 @@ src/
 │   │       ├── Message.ts               # Mongoose schema — separate collection
 │   │       ├── ConnectedRepository.ts   # Mongoose schema — connected repos
 │   │       └── index.ts                 # Barrel export
+│   ├── context/
+│   │   ├── types.ts                     # ContextQueryResult, GraphCapabilities, GraphStatusResult
+│   │   ├── graphClient.ts               # McpGraphClient — wraps @modelcontextprotocol/sdk
+│   │   ├── graphService.ts              # Domain methods: explainArchitecture, findRelevantFiles, etc.
+│   │   ├── contextService.ts            # ContextService singleton — LocalProvider routing + fallback
+│   │   └── verify-graph.ts             # Dev verification script: connect → listTools → getGraphStatus
 │   └── repos/
 │       ├── types.ts                     # RepoFile, RepositoryMetadata, RepositoryProvider interface
 │       ├── repositoryService.ts         # connectRepository, listDirectory, readFile, searchFiles
@@ -511,6 +580,21 @@ User deletes conversation
 - [x] Configured multi-step loops using `stopWhen: isStepCount(5)` in `streamText`
 - [x] Passed client's `activeRepoId` in `ChatInterface` request payload to `/api/chat/stream`
 
+### Phase 6 — Graphify Repository Context Integration
+- [x] Installed `@modelcontextprotocol/sdk` as the official MCP client
+- [x] Created `src/server/context/` module: `types.ts`, `graphClient.ts`, `graphService.ts`, `contextService.ts`
+- [x] `McpGraphClient` wraps `@modelcontextprotocol/sdk` `Client` + `SSEClientTransport`; handles 5s connect timeout and clean lifecycle
+- [x] `GraphService` exposes domain-level methods (`explainArchitecture`, `findRelevantFiles`, `findDependencies`, `findRelatedSymbols`, `findCallHierarchy`, `findEntryPoints`)
+- [x] `getCapabilities()` discovers server tools at runtime via `listTools()` — no hardcoded assumptions
+- [x] `getGraphStatus()` detects indexing via server responses only — never inspects local file paths
+- [x] Graceful fallback: if offline/not-indexed `createContextTools()` returns `{}` silently
+- [x] `createContextTools(session)` dynamically registers discovered MCP tools as Vercel AI SDK tools
+- [x] `jsonSchemaToZod()` converts Graphify JSON Schema input schemas to Zod at runtime
+- [x] Merged repo tools + context tools in `openrouter.ts` before every `streamText` call
+- [x] Updated `SYSTEM_PROMPT` with Graphify usage strategy for the LLM
+- [x] `verify-graph.ts` dev verification script (capability discovery + graceful offline handling confirmed)
+- [x] Build passes clean (TypeScript strict mode)
+
 ---
 
 ## Planned Features (Remaining)
@@ -521,7 +605,8 @@ User deletes conversation
 - [ ] Model selector in TopBar (functional, not UI-only)
 - [ ] LangGraph agent integration
 - [ ] RAG — file parsing, chunking, embeddings, vector DB, semantic search
-- [ ] MCP (Model Context Protocol) — filesystem, GitHub, terminal, browser
+- [x] MCP (Model Context Protocol) — Graphify context engine integrated via official SDK
+- [ ] MCP (Model Context Protocol) — filesystem, GitHub, terminal, browser tools (future)
 - [ ] Multi-agent system (Engineer, Reviewer, Debugger, Docs, Tests, Security)
 - [ ] File attachments
 - [ ] Voice input
@@ -582,7 +667,31 @@ User deletes conversation
 
 11. **`lucide-react` in this project does NOT export `Github`** — use `GitFork` or `GitBranch` instead.
 
+13. **Graphify context tools are registered dynamically**: `createContextTools()` discovers tools from the live MCP server each request. If the server is offline, it returns `{}` silently — no errors surface to the user.
+
+14. **Graphify is LocalProvider-only**: `contextService.supportsGraphify()` returns `false` for GitHub repos. The AI tool list will never include graph tools for a GitHub-backed repository.
+
+15. **To run Graphify MCP server**: `python -m graphify.serve graphify-out/graph.json --transport http --port 5001` (default port is configured by `GRAPHIFY_MCP_URL` env var). The graph must already be built (`graphify .`) before the server can serve it.
+
+16. **Verifying the context layer**: Run `npx tsx --env-file=.env.local src/server/context/verify-graph.ts` to test connection, tool discovery, and fallback behaviour.
+
 12. **Repository files are fetched lazily**: root is loaded on `setActiveRepoId()`. Sub-folders load on `toggleFolderExpanded()`. Results are cached in `filesCache` for the session.
+
+
+Graphify (Version 1)
+
+- Graphify is an optional semantic context provider.
+- DevMind does not build repository graphs.
+- DevMind does not start or stop the Graphify MCP server.
+- Users are responsible for indexing repositories using the official Graphify CLI.
+- Users are responsible for starting the Graphify MCP server.
+- If Graphify is unavailable, DevMind falls back to RepositoryService.
+
+
+
+
+
+
 
 ---
 
@@ -629,4 +738,34 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-06 | Phase: 5 — AI ↔ Repository Integration (Foundation)*
+*Last Updated: 2026-07-09 | Phase: 6 — Graphify Repository Context Integration*
+
+---
+
+## Environment Variables (updated)
+
+```bash
+# .env.local (never commit — covered by .gitignore)
+
+# AI Provider
+OPENROUTER_API_KEY=sk-or-v1-...           # Required
+DEFAULT_AI_MODEL=openai/gpt-4o-mini       # Default model
+ACTIVE_AI_PROVIDER=openrouter             # 'openrouter' (default)
+MAX_CONTEXT_MESSAGES=20                   # Sliding window limit
+
+# Database
+MONGODB_URI=mongodb://localhost:27017/devmind
+
+# Repository
+GITHUB_TOKEN=ghp_...                      # Optional — GitHub PAT for higher rate limits
+
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Graphify MCP (Phase 6 — optional, enables semantic context for local repos)
+# If not set, defaults to http://localhost:5001/sse
+# Graphify must be installed separately: pip install "graphifyy[mcp]"
+# Build graph first: graphify .
+# Start server: python -m graphify.serve graphify-out/graph.json --transport http --port 5001
+GRAPHIFY_MCP_URL=http://localhost:5001/sse
+```
