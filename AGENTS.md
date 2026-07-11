@@ -12,8 +12,8 @@
 |---|---|
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
-| **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Currently a fully functional AI chat application with persistent conversation history. |
-| **Phase** | Phase 6 — Graphify Repository Context Integration |
+| **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Fully functional AI chat application with persistent conversation history and WhatsApp messaging integration. |
+| **Phase** | Phase 7 — WhatsApp Integration |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -38,6 +38,8 @@
 | Database | MongoDB | Atlas or local | Via Mongoose ODM |
 | ODM | Mongoose | latest | Two collections: Conversation + Message |
 | Graph Context | Graphify (`graphifyy[mcp]`) | latest | Knowledge graph MCP server for local repos |
+| WhatsApp | `whatsapp-web.js` | latest | WhatsApp Web client via Puppeteer — server-only |
+| QR Renderer | `qrcode-terminal` | latest | Renders QR code to terminal for first-time auth |
 | MCP Client | `@modelcontextprotocol/sdk` | latest | Official SSE/Streamable-HTTP client for Graphify |
 
 ---
@@ -181,14 +183,15 @@ Context Service
 3. Only read file contents via `readFile` once relevant locations are identified.
 4. Fall back to `searchFiles` / `listDirectory` if Graphify is unavailable or not indexed.
 
-### 8. Database Architecture (Phase 2 + 4)
-Three separate MongoDB collections:
+### 8. Database Architecture (Phase 2 + 4 + 7)
+Four separate MongoDB collections:
 
 | Collection | Purpose |
 |---|---|
 | `conversations` | Conversation metadata only (title, aiModel, timestamps, metadata) |
 | `messages` | All messages with `conversationId` foreign key |
 | `connectedrepositories` | Connected GitHub/local repos with provider config + cached metadata |
+| `whatsappsessions` | Per-phone-number session: linked `conversationId`, `activeRepositoryId`, `preferredModel`, `lastSeen` |
 
 **Why separate collections (not embedded)?**
 - Efficient pagination for large conversations
@@ -196,6 +199,93 @@ Three separate MongoDB collections:
 - Granular message updates without rewriting the whole document
 - Ready for future tool-call results, RAG citations, MCP outputs
 - Scales to thousands of messages per conversation
+
+### 12. Chat Orchestrator Architecture (Phase 7)
+
+The `ChatOrchestrator` is the shared brain for all AI clients (Web, WhatsApp, future Telegram/CLI).
+It decouples client-specific transport from core AI chat logic.
+
+```
+Any Client (Web SSE, WhatsApp, ...)
+    │
+    ▼
+ChatOrchestrator.startChatTurn(context, userMessage)
+    │
+    ├── Create / validate conversation in DB
+    ├── Save user message to DB
+    ├── Check for pending write confirmation (confirm/reject loop)
+    └── Call aiService.streamChat() → return { stream, session, finalize }
+
+Client consumes stream:
+    Web → SSE chunks to browser
+    WhatsApp → buffer full response → message.reply()
+
+Client calls finalize(fullContent):
+    → Saves assistant message to DB
+    → Persists pendingWrite (if any) for confirmation on next turn
+```
+
+**Key types** in `src/server/chat/types.ts`:
+- `ChatSessionContext` — `{ clientType, conversationId, activeRepositoryId, model, metadata }`
+- `StartChatTurnResult` — `{ conversationId, assistantMessageId, stream, session, finalize }`
+
+**`ClientType`** is an open union (`'web' | 'whatsapp' | (string & {})`) — adding a new client never requires editing `types.ts`.
+
+### 13. WhatsApp Integration Architecture (Phase 7)
+
+```
+WhatsApp Message (user phone)
+    │
+    ▼
+whatsapp-web.js Client (singleton, Puppeteer-backed)
+    │
+    ▼
+messageHandler.handleIncomingMessage()
+    │
+    ├── Allowlist check (WHATSAPP_ALLOWED_NUMBERS env var)
+    ├── Group chat filter (drop @g.us messages)
+    ├── Non-text reject (image/video/sticker → "text only")
+    ├── Load / create WhatsappSession from MongoDB
+    ├── Slash command? → commandHandler.handleCommand()
+    │       /repos, /repo <name>, /current, /help
+    └── AI Turn → acquireLock(phoneNumber) → ChatOrchestrator.startChatTurn()
+            │
+            ├── Buffer full stream
+            ├── finalize() → save to DB
+            ├── formatForWhatsApp() → Markdown → WhatsApp markup
+            └── chunkMessage() → split at 3500 chars → reply in sequence
+```
+
+**Module summary** — `src/server/whatsapp/`:
+
+| File | Purpose |
+|---|---|
+| `client.ts` | `getWhatsappClient()` singleton, `initializeWhatsapp()`. Auto-detects Chrome/Edge path. |
+| `startup.ts` | `initWhatsapp()` — thin error-resilient wrapper called from `instrumentation.ts` |
+| `messageHandler.ts` | Entry point for all incoming messages. Allowlist, lock queue, AI turn orchestration. |
+| `commandHandler.ts` | Handles `/repos`, `/repo <name>`, `/current`, `/help` slash commands |
+| `sessionService.ts` | `getOrCreateSession()`, `updateSessionConversation()`, `updateSessionRepository()` |
+| `formatting.ts` | `formatForWhatsApp()` (Markdown → WA markup), `chunkMessage()` (3500-char safe splitter) |
+| `types.ts` | Shared WhatsApp-specific types |
+
+**Startup**: `src/instrumentation.ts` uses Next.js `register()` hook to call `initWhatsapp()` when `NEXT_RUNTIME === 'nodejs'`. WhatsApp initialisation runs in the background — a startup failure never blocks the web app.
+
+**Phone number allowlist**: Comma-separated E.164 digits in `WHATSAPP_ALLOWED_NUMBERS`. Messages from unlisted numbers are silently dropped.
+
+**Per-number lock queue**: `acquireLock(phoneNumber, fn)` ensures concurrent messages from the same number are processed sequentially — no race conditions on conversation state.
+
+**`IWhatsappSession`** (server/db/models/WhatsappSession.ts):
+```typescript
+{
+  phoneNumber: string;           // unique — stripped of non-digits
+  conversationId: string | null; // linked DevMind conversation
+  activeRepositoryId: string | null; // currently selected repo
+  preferredModel?: string | null; // per-user model override
+  lastSeen: Date;                // updated on every message
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
 
 ### 9. Streaming Architecture
 ```
@@ -263,20 +353,34 @@ src/
 │   │       ├── Conversation.ts          # Mongoose schema — metadata only
 │   │       ├── Message.ts               # Mongoose schema — separate collection
 │   │       ├── ConnectedRepository.ts   # Mongoose schema — connected repos
+│   │       ├── WhatsappSession.ts       # Mongoose schema — per-phone WhatsApp sessions
 │   │       └── index.ts                 # Barrel export
+│   ├── chat/
+│   │   ├── chatOrchestrator.ts          # startChatTurn() — shared AI turn logic for all clients
+│   │   └── types.ts                     # ChatSessionContext, StartChatTurnResult, ClientType
 │   ├── context/
 │   │   ├── types.ts                     # ContextQueryResult, GraphCapabilities, GraphStatusResult
 │   │   ├── graphClient.ts               # McpGraphClient — wraps @modelcontextprotocol/sdk
 │   │   ├── graphService.ts              # Domain methods: explainArchitecture, findRelevantFiles, etc.
 │   │   ├── contextService.ts            # ContextService singleton — LocalProvider routing + fallback
 │   │   └── verify-graph.ts             # Dev verification script: connect → listTools → getGraphStatus
-│   └── repos/
+│   ├── repos/
 │       ├── types.ts                     # RepoFile, RepositoryMetadata, RepositoryProvider interface
 │       ├── repositoryService.ts         # connectRepository, listDirectory, readFile, searchFiles
 │       ├── repositoryTools.ts           # Thin tool wrappers — for future AI agent use
 │       └── providers/
 │           ├── github.ts                # GitHubProvider — GitHub REST API
 │           └── local.ts                 # LocalProvider — local filesystem (Node.js fs)
+│   └── whatsapp/
+│       ├── client.ts                    # getWhatsappClient() singleton + initializeWhatsapp()
+│       ├── startup.ts                   # initWhatsapp() — error-resilient boot wrapper
+│       ├── messageHandler.ts            # handleIncomingMessage() — allowlist, lock queue, AI turn
+│       ├── commandHandler.ts            # /repos, /repo, /current, /help slash commands
+│       ├── sessionService.ts            # getOrCreateSession, updateSessionConversation, updateSessionRepository
+│       ├── formatting.ts                # formatForWhatsApp(), chunkMessage()
+│       └── types.ts                     # WhatsApp-specific types
+│
+├── instrumentation.ts                   # Next.js register() hook — starts WhatsApp on server boot
 │
 ├── components/
 │   ├── ui/                              # shadcn/ui — DO NOT hand-edit
@@ -671,9 +775,19 @@ User deletes conversation
 
 14. **Graphify is LocalProvider-only**: `contextService.supportsGraphify()` returns `false` for GitHub repos. The AI tool list will never include graph tools for a GitHub-backed repository.
 
-15. **To run Graphify MCP server**: `python -m graphify.serve graphify-out/graph.json --transport http --port 5001` (default port is configured by `GRAPHIFY_MCP_URL` env var). The graph must already be built (`graphify .`) before the server can serve it.
+15. **To run Graphify MCP server**: Activate the `.venv` first, then `python -m graphify.serve graphify-out/graph.json --transport http --port 5001`. The graph must already be built (`graphify .`) before the server can serve it. The venv is required because Graphify is installed in `.venv`, not globally.
 
 16. **Verifying the context layer**: Run `npx tsx --env-file=.env.local src/server/context/verify-graph.ts` to test connection, tool discovery, and fallback behaviour.
+
+17. **WhatsApp client is a singleton**: `getWhatsappClient()` stores the `whatsapp-web.js` `Client` in `global._whatsappCache`. In Next.js dev mode with hot-reload, this prevents duplicate Puppeteer instances from spawning.
+
+18. **WhatsApp is server-only**: `whatsapp-web.js` is listed in `next.config.ts` → `serverExternalPackages`. It must never be imported in client components. All WhatsApp logic lives under `src/server/whatsapp/`.
+
+19. **WhatsApp startup is non-blocking**: `instrumentation.ts` calls `initWhatsapp()` with `.catch()` — a WhatsApp authentication failure (e.g., no Chrome installed) is logged but never crashes the Next.js app.
+
+20. **Per-number message queue**: `acquireLock(phoneNumber)` in `messageHandler.ts` chains promises per phone number. Rapid sequential messages from the same number will always be processed in order without state races.
+
+21. **ChatOrchestrator is the single AI entry-point for all clients**: The Web SSE route and the WhatsApp message handler both call `startChatTurn()`. Any new client (Telegram, Slack, CLI) should do the same — do NOT call `streamChat()` directly from client handlers.
 
 12. **Repository files are fetched lazily**: root is loaded on `setActiveRepoId()`. Sub-folders load on `toggleFolderExpanded()`. Results are cached in `filesCache` for the session.
 
@@ -703,15 +817,21 @@ npm install
 
 # 2. Configure environment
 cp .env.example .env.local
-# Fill in OPENROUTER_API_KEY and MONGODB_URI
+# Fill in OPENROUTER_API_KEY, MONGODB_URI, and WHATSAPP_ALLOWED_NUMBERS
 
 # 3. Start dev server
 npm run dev
+# WhatsApp will auto-initialize via instrumentation.ts
+# Check terminal for QR code on first run — scan with WhatsApp mobile app
 
 # 4. Open workspace
 # Navigate to http://localhost:3000
 # Login with any name (mock auth)
 # Start chatting — responses come from OpenRouter
+
+# 5. (Optional) Start Graphify MCP server for semantic codebase context
+.venv\Scripts\Activate.ps1   # Windows
+python -m graphify.serve graphify-out/graph.json --transport http --port 5001
 ```
 
 ---
@@ -738,7 +858,7 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-09 | Phase: 6 — Graphify Repository Context Integration*
+*Last Updated: 2026-07-11 | Phase: 7 — WhatsApp Integration*
 
 ---
 
@@ -766,6 +886,16 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 # If not set, defaults to http://localhost:5001/sse
 # Graphify must be installed separately: pip install "graphifyy[mcp]"
 # Build graph first: graphify .
-# Start server: python -m graphify.serve graphify-out/graph.json --transport http --port 5001
+# Activate venv first, then: python -m graphify.serve graphify-out/graph.json --transport http --port 5001
 GRAPHIFY_MCP_URL=http://localhost:5001/sse
+
+# WhatsApp (Phase 7 — required for WhatsApp integration)
+# Comma-separated phone numbers allowed to chat with DevMind via WhatsApp (digits only, no +)
+# Example: 12025551234,447911123456
+# If empty or unset, ALL incoming WhatsApp messages will be silently dropped
+WHATSAPP_ALLOWED_NUMBERS=
+
+# Maximum WhatsApp message length before chunking (default: 3500)
+# WhatsApp has a ~4096 char limit per message
+WHATSAPP_MAX_MESSAGE_LENGTH=3500
 ```

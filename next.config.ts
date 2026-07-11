@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
     // Native browser View Transitions API for smooth route changes
     viewTransition: true,
   },
+  serverExternalPackages: ['whatsapp-web.js'],
   images: {
     remotePatterns: [
       {

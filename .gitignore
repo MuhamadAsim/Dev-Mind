@@ -40,3 +40,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+/graphify-out
+./graphify-out
+/.graphify-out
+
+/.venv
+
+# whatsapp-web.js sessions
+.wwebjs_auth/
+.wwebjs_cache/

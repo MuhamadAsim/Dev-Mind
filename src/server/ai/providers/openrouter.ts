@@ -26,7 +26,22 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
       const repoTools = createRepositoryTools(session);
       const contextTools = await createContextTools(session);
       const tools = { ...repoTools, ...contextTools };
+      console.log("========== LLM MESSAGES ==========");
 
+      messages.forEach((m, i) => {
+        const text =
+          typeof m.content === "string"
+            ? m.content
+            : JSON.stringify(m.content);
+
+        console.log({
+          index: i,
+          role: m.role,
+          chars: text.length,
+        });
+      });
+
+      console.log("=================================");
       const result = await streamText({
         model: openrouter.chat(model),
         instructions,
