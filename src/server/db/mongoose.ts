@@ -6,8 +6,6 @@
 // ============================================================
 import mongoose from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
 // Module-level cache — persists across hot reloads in dev
 interface ConnectionCache {
   conn: typeof mongoose | null;
@@ -25,14 +23,15 @@ export async function connectDB(): Promise<typeof mongoose> {
   // Already connected
   if (cache.conn) return cache.conn;
 
-  if (!MONGODB_URI) {
+  const mongoUri = process.env.MONGODB_URI;
+  if (!mongoUri) {
     throw new Error('Missing MONGODB_URI environment variable. Add it to .env.local.');
   }
 
   // Connection in progress — reuse the same promise
   if (!cache.promise) {
     cache.promise = mongoose
-      .connect(MONGODB_URI as string, {
+      .connect(mongoUri as string, {
         bufferCommands: false,
       })
       .then((m) => {

@@ -4,11 +4,14 @@ import {
   setConversationPendingWrite,
   getConversationPendingWrite,
 } from '../db/conversationService';
-import { addMessage, getMessages, updateMessageContent, type MessageDTO } from '../db/messageService';
+import { addMessage, updateMessageContent, type MessageDTO } from '../db/messageService';
 import { writeRepositoryFile, createRepositoryDirectory } from '../repos/repositoryService';
 import { streamChat } from '../ai/aiService';
+import { routeContext } from '../orchestration/contextRouter';
+import { buildContext } from '../orchestration/contextBuilder';
+import type { RouterInput } from '../orchestration/types';
 import type { ChatSessionContext, StartChatTurnResult } from './types';
-import type { ChatStreamPart, ChatSession, AIMessage } from '../ai/types';
+import type { ChatStreamPart, ChatSession } from '../ai/types';
 
 function detectConfirmation(message: string): 'confirm' | 'reject' | 'unclear' {
   const m = message.trim().toLowerCase().replace(/[.!]+$/, '');
@@ -172,21 +175,27 @@ export async function startChatTurn(
     }
   }
 
-  // 4. Normal LLM Turn
-  const history = await getMessages(conversationId);
-  const aiMessages: AIMessage[] = history.map((m) => ({
-    role: m.role as AIMessage['role'],
-    content: m.content,
-  }));
+  // 4. Normal LLM Turn — context orchestration
+  // Route to the appropriate context providers, then build the
+  // assembled context (conversation history + system context block).
+  const routerInput: RouterInput = {
+    userMessage: trimmedMessage,
+    activeRepositoryId,
+    conversationId,
+  };
+
+  const selectedProviders = await routeContext(routerInput);
+  const assembledContext = await buildContext(selectedProviders, routerInput);
 
   const assistantMsgRecord = await addMessage(conversationId, 'assistant', 'Thinking...', {
     status: 'sending',
   });
 
   const { stream, session } = await streamChat({
-    messages: aiMessages,
+    userMessage: trimmedMessage,
     model,
     activeRepoId: activeRepositoryId,
+    assembledContext,
   });
 
   const finalize = async (fullText: string) => {

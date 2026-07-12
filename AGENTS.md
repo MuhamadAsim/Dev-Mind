@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Fully functional AI chat application with persistent conversation history and WhatsApp messaging integration. |
-| **Phase** | Phase 9 — RAG Backend & AI Tools |
+| **Phase** | Phase 10 — Context Orchestration Layer |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -358,15 +358,15 @@ retrievalService.retrieve(query, { knowledgeBaseId?, limit? })
 
 **AI Tools (createKnowledgeTools):**
 All tools call existing service functions — no duplicate logic.
-
 | Tool | Underlying Service |
 |---|---|
 | `listKnowledgeBases` | `knowledgeBaseService.listKnowledgeBases()` |
 | `createKnowledgeBase` | `knowledgeBaseService.createKnowledgeBase()` |
 | `renameKnowledgeBase` | `knowledgeBaseService.renameKnowledgeBase()` |
 | `deleteKnowledgeBase` | `knowledgeBaseService.deleteKnowledgeBase()` |
-| `listDocuments` | `kbDocumentService.listDocuments()` |
+| `listDocuments` | `kbDocumentService.listDocuments()` (storagePath/extractedTextPath stripped before returning to LLM) |
 | `deleteDocument` | `kbDocumentService.deleteDocument()` |
+| `getDocumentContent` | `kbDocumentService.getDocumentContent()` — reads extracted text via `storageProvider.readText()`. **Does not require an active repository.** |
 
 Tools resolve knowledge base and document **names** to IDs via case-insensitive regex lookup — the AI never needs to know internal MongoDB ObjectIds.
 
@@ -893,6 +893,10 @@ User deletes conversation
 
 21. **ChatOrchestrator is the single AI entry-point for all clients**: The Web SSE route and the WhatsApp message handler both call `startChatTurn()`. Any new client (Telegram, Slack, CLI) should do the same — do NOT call `streamChat()` directly from client handlers.
 
+
+
+22. **KB document content is never read via repository tools**: `getDocumentContent` (in `kbDocumentService.ts`) is the only way the AI reads a Knowledge Base document's text — it calls `storageProvider.readText()` directly. `readFile` (repository tool) must never be used for `storage/uploads/` or `storage/extracted/` paths; those are internal to the knowledge module, not repo-relative paths, and using `readFile` for them only worked before by filesystem coincidence when a local repo happened to share the same disk root. Fixed 2026-07-12.
+
 12. **Repository files are fetched lazily**: root is loaded on `setActiveRepoId()`. Sub-folders load on `toggleFolderExpanded()`. Results are cached in `filesCache` for the session.
 
 
@@ -962,8 +966,7 @@ npm run build
 
 ---
 
-*Last Updated: 2026-07-11 | Phase: 7 — WhatsApp Integration*
-
+*Last Updated: 2026-07-12 | Phase: 10 — Context Orchestration Layer*
 ---
 
 ## Environment Variables (updated)
@@ -1003,3 +1006,70 @@ WHATSAPP_ALLOWED_NUMBERS=
 # WhatsApp has a ~4096 char limit per message
 WHATSAPP_MAX_MESSAGE_LENGTH=3500
 ```
+
+### 15. Context Orchestration Architecture (Phase 10)
+
+Introduces a three-component orchestration layer that decouples context gathering from the AI Service. The AI Service now has a single responsibility: receive a user message + assembled context, then call the LLM.
+
+```
+User Message
+    │
+    ▼
+Chat Orchestrator
+    │
+    ├── routeContext(input)       → ProviderName[]
+    │       Signals (priority order):
+    │       1. Session state  (activeRepositoryId → repo; conversationId → conversation)
+    │       2. Structural intent patterns (code, document-seeking, conversation reference)
+    │       3. Existence check (KBs in DB + information-seeking query → knowledge)
+    │
+    ├── buildContext(providers, input)  → AssembledContext
+    │       Fan-out via Promise.allSettled — failures never block other providers
+    │       Conversation entries → AIMessage[] (proper LLM turn format)
+    │       Repo + Knowledge entries → systemContextBlock (prepended to system prompt)
+    │
+    ▼
+AI Service
+    messages[]   = conversationMessages + current user message
+    instructions = systemContextBlock + base SYSTEM_PROMPT
+```
+
+**Module: `src/server/orchestration/`**
+
+| File | Purpose |
+|---|---|
+| `types.ts` | `ProviderName`, `ContextEntry`, `ProviderResult`, `AssembledContext`, `RouterInput`, `IContextProvider` |
+| `contextRouter.ts` | `routeContext()` — deterministic routing via session state + intent patterns |
+| `contextBuilder.ts` | `buildContext()` — fan-out executor + formatter. Contains `PROVIDER_REGISTRY` |
+| `providers/conversationProvider.ts` | Fetches message history, applies sliding window, returns `ContextEntry[]` |
+| `providers/repositoryProvider.ts` | Calls `graphService.findRelevantFiles(userMessage)` — query-scoped, not broad |
+| `providers/knowledgeProvider.ts` | Calls `retrieve()` from `retrievalService`, filters by `MIN_RELEVANCE_SCORE=0.3` |
+
+**Key design rules:**
+- Providers are stateless and independent — they must not know about each other
+- Providers return structured `ProviderResult { entries: ContextEntry[] }` — never formatted strings
+- The Context Builder is the sole formatter
+- To add a new provider: implement `IContextProvider`, add one line to `PROVIDER_REGISTRY` in `contextBuilder.ts`
+- Individual provider failures are logged; other providers continue unaffected
+- `tools.ts`, Graphify, `retrievalService`, and WhatsApp modules are unchanged
+- `truncateConversationContext` remains in `aiService.ts` as a pure utility (no DB access); Conversation Provider imports it
+
+**`IContextProvider` interface:**
+```typescript
+interface IContextProvider {
+  readonly name: ProviderName;
+  provide(input: RouterInput): Promise<ProviderResult | null>;
+}
+```
+
+**`AssembledContext` shape (received by AI Service):**
+```typescript
+interface AssembledContext {
+  providers: ProviderName[];         // which providers contributed
+  conversationMessages: AIMessage[]; // passed as messages[] to streamText
+  systemContextBlock: string;        // prepended to system prompt
+  hasContext: boolean;
+}
+```
+
+**Future extensibility examples:** Gmail, Calendar, Google Drive, Memory, Web Search — each requires only a new provider class + one registry entry.

@@ -25,6 +25,7 @@ import {
 import {
   listDocuments,
   deleteDocument,
+  getDocumentContent,
 } from '../knowledge/kbDocumentService';
 import mongoose from 'mongoose';
 
@@ -501,6 +502,30 @@ export function createKnowledgeTools(session: ChatSession) {
           return { success: true, documents: docs };
         } catch (err: any) {
           return { error: err.message || 'Failed to list documents.' };
+        }
+      },
+    }),
+    getDocumentContent: tool({
+      description:
+        'Get the full extracted text content of a document in a Knowledge Base, so you can answer questions about what it contains. Use this — NOT readFile — for any document that came from listDocuments. readFile only works on connected code repositories, not Knowledge Base documents, and will fail or (worse) silently read the wrong file.',
+      inputSchema: z.object({
+        nameOrId: z.string().describe('The filename (e.g. "resume.pdf") or MongoDB ID of the document.'),
+        knowledgeBaseNameOrId: z.string().describe('The name or MongoDB ID of the parent Knowledge Base.'),
+      }),
+      execute: async ({ nameOrId, knowledgeBaseNameOrId }) => {
+        try {
+          const kbId = await resolveKnowledgeBaseId(knowledgeBaseNameOrId);
+          if (!kbId) {
+            return { error: `No knowledge base matches "${knowledgeBaseNameOrId}".` };
+          }
+          const docId = await resolveDocumentId(kbId, nameOrId);
+          if (!docId) {
+            return { error: `No document matches "${nameOrId}" in the knowledge base "${knowledgeBaseNameOrId}".` };
+          }
+          const content = await getDocumentContent(docId);
+          return { success: true, content };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to get document content.' };
         }
       },
     }),

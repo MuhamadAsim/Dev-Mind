@@ -98,6 +98,37 @@ export async function updateDocumentStatus(
   await KbDocumentModel.findByIdAndUpdate(id, update);
 }
 
+
+
+/**
+ * Get the full extracted text content of a document.
+ * Used by the getDocumentContent AI tool — this is the ONLY correct
+ * way to read a KB document's content. Never route this through
+ * repository readFile; storagePath/extractedTextPath are internal
+ * to the knowledge module and are not repo-relative paths.
+ */
+export async function getDocumentContent(id: string): Promise<string> {
+  await connectDB();
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new Error(`Invalid document ID: ${id}`);
+  }
+
+  const doc = await KbDocumentModel.findById(id).lean<IKbDocument>();
+  if (!doc) {
+    throw new Error(`Document not found: ${id}`);
+  }
+  if (doc.status !== 'ready') {
+    throw new Error(
+      `Document "${doc.filename}" is not ready yet (status: ${doc.status}).`
+    );
+  }
+  if (!doc.extractedTextPath) {
+    throw new Error(`Document "${doc.filename}" has no extracted text available.`);
+  }
+
+  return storageProvider.readText(doc.extractedTextPath);
+}
+
 /**
  * Delete a document and cascade-delete:
  *   - All DocumentChunk records for this document
