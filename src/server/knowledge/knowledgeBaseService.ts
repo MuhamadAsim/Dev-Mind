@@ -76,3 +76,19 @@ export async function deleteKnowledgeBase(id: string): Promise<boolean> {
 
   return true;
 }
+
+export async function renameKnowledgeBase(
+  id: string,
+  newName: string
+): Promise<KnowledgeBaseSummary | null> {
+  await connectDB();
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+
+  const doc = await KnowledgeBaseModel.findByIdAndUpdate(
+    id,
+    { name: newName.trim() },
+    { new: true }
+  );
+
+  return doc ? toSummary(doc) : null;
+}

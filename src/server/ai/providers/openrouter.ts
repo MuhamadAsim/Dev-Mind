@@ -4,7 +4,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, isStepCount } from 'ai';
 import type { AIMessage, AIProvider, AIProviderConfig, ChatSession, ChatStreamPart } from '../types';
-import { createRepositoryTools, createContextTools } from '../tools';
+import { createRepositoryTools, createContextTools, createKnowledgeTools } from '../tools';
 
 export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
   const openrouter = createOpenAI({
@@ -25,7 +25,8 @@ export function createOpenRouterProvider(config: AIProviderConfig): AIProvider {
     ): Promise<ReadableStream<ChatStreamPart>> {
       const repoTools = createRepositoryTools(session);
       const contextTools = await createContextTools(session);
-      const tools = { ...repoTools, ...contextTools };
+      const knowledgeTools = createKnowledgeTools(session);
+      const tools = { ...repoTools, ...contextTools, ...knowledgeTools };
       console.log("========== LLM MESSAGES ==========");
 
       messages.forEach((m, i) => {

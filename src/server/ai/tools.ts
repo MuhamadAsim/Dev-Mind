@@ -14,6 +14,19 @@ import {
 import type { ChatSession } from './types';
 import { contextService } from '../context/contextService';
 import { McpGraphClient } from '../context/graphClient';
+import { connectDB } from '../db/mongoose';
+import { KnowledgeBaseModel, KbDocumentModel } from '../db/models';
+import {
+  listKnowledgeBases,
+  createKnowledgeBase,
+  renameKnowledgeBase,
+  deleteKnowledgeBase,
+} from '../knowledge/knowledgeBaseService';
+import {
+  listDocuments,
+  deleteDocument,
+} from '../knowledge/kbDocumentService';
+import mongoose from 'mongoose';
 
 const NO_REPO_ERROR = {
   error:
@@ -350,4 +363,173 @@ export async function createContextTools(session: ChatSession): Promise<Record<s
     console.warn('[createContextTools] Failed to load tools from Graphify MCP server:', error);
     return {};
   }
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+async function resolveKnowledgeBaseId(nameOrId: string): Promise<string | null> {
+  await connectDB();
+  if (mongoose.Types.ObjectId.isValid(nameOrId)) {
+    const exists = await KnowledgeBaseModel.findById(nameOrId).lean();
+    if (exists) return exists._id.toString();
+  }
+  const exactMatch = await KnowledgeBaseModel.findOne({
+    name: { $regex: new RegExp('^' + escapeRegex(nameOrId) + '$', 'i') },
+  }).lean();
+  if (exactMatch) return exactMatch._id.toString();
+
+  const partialMatch = await KnowledgeBaseModel.findOne({
+    name: { $regex: new RegExp(escapeRegex(nameOrId), 'i') },
+  }).lean();
+  if (partialMatch) return partialMatch._id.toString();
+
+  return null;
+}
+
+async function resolveDocumentId(kbId: string, nameOrId: string): Promise<string | null> {
+  await connectDB();
+  const kbObjectId = new mongoose.Types.ObjectId(kbId);
+  if (mongoose.Types.ObjectId.isValid(nameOrId)) {
+    const exists = await KbDocumentModel.findOne({ _id: nameOrId, knowledgeBaseId: kbObjectId }).lean();
+    if (exists) return exists._id.toString();
+  }
+  const exactMatch = await KbDocumentModel.findOne({
+    knowledgeBaseId: kbObjectId,
+    filename: { $regex: new RegExp('^' + escapeRegex(nameOrId) + '$', 'i') },
+  }).lean();
+  if (exactMatch) return exactMatch._id.toString();
+
+  const partialMatch = await KbDocumentModel.findOne({
+    knowledgeBaseId: kbObjectId,
+    filename: { $regex: new RegExp(escapeRegex(nameOrId), 'i') },
+  }).lean();
+  if (partialMatch) return partialMatch._id.toString();
+
+  return null;
+}
+
+export function createKnowledgeTools(session: ChatSession) {
+  return {
+    listKnowledgeBases: tool({
+      description: 'List all existing Knowledge Bases.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        try {
+          const kbs = await listKnowledgeBases();
+          return { success: true, knowledgeBases: kbs };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to list knowledge bases.' };
+        }
+      },
+    }),
+
+    createKnowledgeBase: tool({
+      description: 'Create a new Knowledge Base.',
+      inputSchema: z.object({
+        name: z.string().describe('The name of the Knowledge Base (e.g. "University").'),
+        description: z.string().optional().describe('An optional brief description of the Knowledge Base.'),
+      }),
+      execute: async ({ name, description }) => {
+        try {
+          const kb = await createKnowledgeBase(name, description);
+          return { success: true, knowledgeBase: kb };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to create knowledge base.' };
+        }
+      },
+    }),
+
+    renameKnowledgeBase: tool({
+      description: 'Rename an existing Knowledge Base.',
+      inputSchema: z.object({
+        nameOrId: z.string().describe('The name or MongoDB ID of the Knowledge Base to rename.'),
+        newName: z.string().describe('The new name for the Knowledge Base.'),
+      }),
+      execute: async ({ nameOrId, newName }) => {
+        try {
+          const kbId = await resolveKnowledgeBaseId(nameOrId);
+          if (!kbId) {
+            return { error: `No knowledge base matches "${nameOrId}".` };
+          }
+          const updated = await renameKnowledgeBase(kbId, newName);
+          if (!updated) {
+            return { error: `Failed to rename knowledge base with ID ${kbId}.` };
+          }
+          return { success: true, knowledgeBase: updated };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to rename knowledge base.' };
+        }
+      },
+    }),
+
+    deleteKnowledgeBase: tool({
+      description: 'Delete a Knowledge Base and all its documents and chunks permanently.',
+      inputSchema: z.object({
+        nameOrId: z.string().describe('The name or MongoDB ID of the Knowledge Base to delete.'),
+      }),
+      execute: async ({ nameOrId }) => {
+        try {
+          const kbId = await resolveKnowledgeBaseId(nameOrId);
+          if (!kbId) {
+            return { error: `No knowledge base matches "${nameOrId}".` };
+          }
+          const success = await deleteKnowledgeBase(kbId);
+          if (!success) {
+            return { error: `Failed to delete knowledge base with ID ${kbId}.` };
+          }
+          return { success: true, message: `Knowledge base "${nameOrId}" and its documents have been deleted.` };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to delete knowledge base.' };
+        }
+      },
+    }),
+
+    listDocuments: tool({
+      description: 'List all documents uploaded to a specific Knowledge Base.',
+      inputSchema: z.object({
+        knowledgeBaseNameOrId: z.string().describe('The name or MongoDB ID of the parent Knowledge Base.'),
+      }),
+      execute: async ({ knowledgeBaseNameOrId }) => {
+        try {
+          const kbId = await resolveKnowledgeBaseId(knowledgeBaseNameOrId);
+          if (!kbId) {
+            return { error: `No knowledge base matches "${knowledgeBaseNameOrId}".` };
+          }
+          const docs = await listDocuments(kbId);
+          return { success: true, documents: docs };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to list documents.' };
+        }
+      },
+    }),
+
+    deleteDocument: tool({
+      description: 'Delete a specific document and its text chunks from a Knowledge Base.',
+      inputSchema: z.object({
+        nameOrId: z.string().describe('The filename (e.g. "resume.pdf") or MongoDB ID of the document to delete.'),
+        knowledgeBaseNameOrId: z.string().describe('The name or MongoDB ID of the parent Knowledge Base.'),
+      }),
+      execute: async ({ nameOrId, knowledgeBaseNameOrId }) => {
+        try {
+          const kbId = await resolveKnowledgeBaseId(knowledgeBaseNameOrId);
+          if (!kbId) {
+            return { error: `No knowledge base matches "${knowledgeBaseNameOrId}".` };
+          }
+          const docId = await resolveDocumentId(kbId, nameOrId);
+          if (!docId) {
+            return { error: `No document matches "${nameOrId}" in the knowledge base "${knowledgeBaseNameOrId}".` };
+          }
+          const success = await deleteDocument(docId);
+          if (!success) {
+            return { error: `Failed to delete document with ID ${docId}.` };
+          }
+          return { success: true, message: `Document "${nameOrId}" has been deleted.` };
+        } catch (err: any) {
+          return { error: err.message || 'Failed to delete document.' };
+        }
+      },
+    }),
+  };
 }

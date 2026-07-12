@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Fully functional AI chat application with persistent conversation history and WhatsApp messaging integration. |
-| **Phase** | Phase 8 — Knowledge Base Foundation |
+| **Phase** | Phase 9 — RAG Backend & AI Tools |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -194,7 +194,7 @@ Seven separate MongoDB collections:
 | `whatsappsessions` | Per-phone-number session: linked `conversationId`, `activeRepositoryId`, `preferredModel`, `lastSeen` |
 | `knowledgebases` | Knowledge Base metadata, description, and embeddingModel configurations |
 | `kbdocuments` | Document records with status, storagePath, sizeBytes, parsing metadata |
-| `documentchunks` | Document text chunks with indexes and original char boundaries |
+| `documentchunks` | Document text chunks with 384-dim embedding vectors for Atlas Vector Search |
 
 **Why separate collections (not embedded)?**
 - Efficient pagination for large conversations
@@ -315,6 +315,73 @@ To prevent exceeding the model's context window limit as a conversation grows, a
 - **Context Limit**: Only the most recent `MAX_CONTEXT_MESSAGES` (configured via `.env.local` or defaulting to 20) are sent to the AI provider.
 - **System Prompt**: The system prompt is always appended separately as instruction headers, ensuring it is never lost regardless of window truncation.
 - **Extensible Architecture**: The helper `truncateConversationContext` in `src/server/ai/aiService.ts` serves as the entry-point. It is designed to easily swap in token-based estimation, LLM summarization, or semantic memory (RAG) retrievals in the future.
+
+### 14. RAG Backend Architecture (Phase 9)
+
+```
+User uploads document
+    │
+    ▼
+uploadService.processUpload() → fire-and-forget processDocument(docId)
+    │
+    ├── Extract text (parser registry)
+    ├── Persist extracted text to storage/extracted/<kbId>/<docId>.txt
+    ├── Chunk text (CharacterChunkingStrategy: 800 chars / 100 overlap)
+    ├── Generate batched embeddings (POST EMBEDDING_SERVICE_URL/embed, batch=32)
+    └── vectorStoreProvider.saveChunks() → MongoDB documentchunks
+
+Retrieval query:
+    │
+    ▼
+retrievalService.retrieve(query, { knowledgeBaseId?, limit? })
+    │
+    ├── getEmbedding(query) → 384-dim vector
+    └── vectorStoreProvider.similaritySearch(vector, options)
+            │
+            ▼
+        MongoDB $vectorSearch (Atlas Vector Search index: "vector_index")
+            │
+            ▼
+        Returns VectorStoreChunk[] with score: number
+```
+
+**Key abstractions:**
+
+| File | Purpose |
+|---|---|
+| `embeddingService.ts` | HTTP client to SentenceTransformers service. Reads `EMBEDDING_SERVICE_URL`. Batches of 32. |
+| `storage/vectorStoreProvider.ts` | Abstract `VectorStoreProvider` interface (database-agnostic) |
+| `storage/mongoVectorStoreProvider.ts` | MongoDB Atlas `$vectorSearch` implementation. Falls back gracefully on local MongoDB. |
+| `storage/vectorStore.ts` | Active vector store singleton — swap provider in one line |
+| `retrievalService.ts` | Pure retrieval: embed query → similarity search → return scored chunks |
+| `documentProcessor.ts` | Now extended with `reindexDocument(docId)` for re-chunking/re-embedding |
+
+**AI Tools (createKnowledgeTools):**
+All tools call existing service functions — no duplicate logic.
+
+| Tool | Underlying Service |
+|---|---|
+| `listKnowledgeBases` | `knowledgeBaseService.listKnowledgeBases()` |
+| `createKnowledgeBase` | `knowledgeBaseService.createKnowledgeBase()` |
+| `renameKnowledgeBase` | `knowledgeBaseService.renameKnowledgeBase()` |
+| `deleteKnowledgeBase` | `knowledgeBaseService.deleteKnowledgeBase()` |
+| `listDocuments` | `kbDocumentService.listDocuments()` |
+| `deleteDocument` | `kbDocumentService.deleteDocument()` |
+
+Tools resolve knowledge base and document **names** to IDs via case-insensitive regex lookup — the AI never needs to know internal MongoDB ObjectIds.
+
+**Atlas Vector Search Index** — must be created manually in MongoDB Atlas UI:
+```json
+{
+  "fields": [
+    { "type": "vector", "path": "embedding", "numDimensions": 384, "similarity": "dotProduct" },
+    { "type": "filter", "path": "knowledgeBaseId" }
+  ]
+}
+```
+Index name: `vector_index` (configurable via `MONGODB_VECTOR_INDEX` env var).
+
+**`reindexDocument(docId)`** — Reads saved `extractedTextPath`, re-chunks, re-embeds, deletes old vectors and inserts new ones. Enables reprocessing when chunking strategy or embedding model changes.
 
 ---
 
