@@ -5,10 +5,12 @@ import { Sidebar } from './Sidebar';
 import { RepositoryPanel } from './RepositoryPanel';
 import { TopBar } from './TopBar';
 import { ChatInterface } from '@/components/chat/ChatInterface';
+import { KnowledgePanel } from '@/components/knowledge/KnowledgePanel';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useInitAuth } from '@/store/hooks/useAuth';
 import { useSetConversations } from '@/store/hooks/useChat';
 import { useFetchConnectedRepos } from '@/store/hooks/useRepo';
+import { useActiveView } from '@/store/hooks/useUI';
 import { Conversation } from '@/types';
 
 export function WorkspaceShell() {
@@ -63,6 +65,8 @@ export function WorkspaceShell() {
   // Register global keyboard shortcuts
   useKeyboardShortcuts();
 
+  const activeView = useActiveView();
+
   return (
     <div
       id="workspace-shell"
@@ -77,9 +81,9 @@ export function WorkspaceShell() {
         {/* Left: Sidebar */}
         <Sidebar />
 
-        {/* Center: Chat */}
+        {/* Center: Chat or Knowledge */}
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <ChatInterface />
+          {activeView === 'knowledge' ? <KnowledgePanel /> : <ChatInterface />}
         </main>
 
         {/* Right: Repo Panel */}

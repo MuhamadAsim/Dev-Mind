@@ -14,6 +14,7 @@ export interface UISlice {
   sidebarWidth: number;
   repoPanelWidth: number;
   commandPaletteOpen: boolean;
+  activeView: 'chat' | 'knowledge';
 
   // Actions
   setTheme: (theme: Theme) => void;
@@ -24,6 +25,7 @@ export interface UISlice {
   setSidebarWidth: (width: number) => void;
   setRepoPanelWidth: (width: number) => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setActiveView: (view: 'chat' | 'knowledge') => void;
 }
 
 export const createUISlice: StateCreator<RootStore, [], [], UISlice> = (set) => ({
@@ -33,6 +35,7 @@ export const createUISlice: StateCreator<RootStore, [], [], UISlice> = (set) => 
   sidebarWidth: UI_DEFAULTS.SIDEBAR_WIDTH,
   repoPanelWidth: UI_DEFAULTS.REPO_PANEL_WIDTH,
   commandPaletteOpen: false,
+  activeView: 'chat',
 
   setTheme: (theme) => set({ theme }),
   toggleSidebar: () => set((s) => ({ isSidebarOpen: !s.isSidebarOpen })),
@@ -42,4 +45,5 @@ export const createUISlice: StateCreator<RootStore, [], [], UISlice> = (set) => 
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setRepoPanelWidth: (width) => set({ repoPanelWidth: width }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setActiveView: (activeView) => set({ activeView }),
 });

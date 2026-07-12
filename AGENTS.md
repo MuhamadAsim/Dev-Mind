@@ -13,7 +13,7 @@
 | **Name** | DevMind AI |
 | **Type** | Personal AI Software Engineering Workspace |
 | **Vision** | AI coding assistant (ChatGPT + Cursor + Claude) for a single developer. Fully functional AI chat application with persistent conversation history and WhatsApp messaging integration. |
-| **Phase** | Phase 7 — WhatsApp Integration |
+| **Phase** | Phase 8 — Knowledge Base Foundation |
 | **Location** | `c:\Users\ranah\Desktop\assistant` |
 
 ---
@@ -183,8 +183,8 @@ Context Service
 3. Only read file contents via `readFile` once relevant locations are identified.
 4. Fall back to `searchFiles` / `listDirectory` if Graphify is unavailable or not indexed.
 
-### 8. Database Architecture (Phase 2 + 4 + 7)
-Four separate MongoDB collections:
+### 8. Database Architecture (Phase 2 + 4 + 7 + 8)
+Seven separate MongoDB collections:
 
 | Collection | Purpose |
 |---|---|
@@ -192,6 +192,9 @@ Four separate MongoDB collections:
 | `messages` | All messages with `conversationId` foreign key |
 | `connectedrepositories` | Connected GitHub/local repos with provider config + cached metadata |
 | `whatsappsessions` | Per-phone-number session: linked `conversationId`, `activeRepositoryId`, `preferredModel`, `lastSeen` |
+| `knowledgebases` | Knowledge Base metadata, description, and embeddingModel configurations |
+| `kbdocuments` | Document records with status, storagePath, sizeBytes, parsing metadata |
+| `documentchunks` | Document text chunks with indexes and original char boundaries |
 
 **Why separate collections (not embedded)?**
 - Efficient pagination for large conversations
@@ -329,6 +332,14 @@ src/
 │   │   │   └── [id]/
 │   │   │       ├── route.ts             # GET/PATCH/DELETE — single conversation
 │   │   │       └── messages/route.ts    # GET — messages for a conversation
+│   │   ├── knowledge/
+│   │   │   ├── route.ts                 # GET  — list all KBs | POST — create KB
+│   │   │   └── [id]/
+│   │   │       ├── route.ts             # GET  — get KB | DELETE — delete KB
+│   │   │       └── documents/
+│   │   │           ├── route.ts         # GET  — list docs | POST — upload doc
+│   │   │           └── [docId]/
+│   │   │               └── route.ts     # GET  — get doc metadata | DELETE — delete doc
 │   │   └── repos/
 │   │       ├── route.ts                 # GET  — list repos | POST — connect repo
 │   │       └── [id]/
@@ -371,7 +382,7 @@ src/
 │       └── providers/
 │           ├── github.ts                # GitHubProvider — GitHub REST API
 │           └── local.ts                 # LocalProvider — local filesystem (Node.js fs)
-│   └── whatsapp/
+│   ├── whatsapp/
 │       ├── client.ts                    # getWhatsappClient() singleton + initializeWhatsapp()
 │       ├── startup.ts                   # initWhatsapp() — error-resilient boot wrapper
 │       ├── messageHandler.ts            # handleIncomingMessage() — allowlist, lock queue, AI turn
@@ -379,6 +390,26 @@ src/
 │       ├── sessionService.ts            # getOrCreateSession, updateSessionConversation, updateSessionRepository
 │       ├── formatting.ts                # formatForWhatsApp(), chunkMessage()
 │       └── types.ts                     # WhatsApp-specific types
+│   └── knowledge/
+│       ├── types.ts                     # DTOs, file types, constants
+│       ├── knowledgeBaseService.ts       # CRUD for KnowledgeBases
+│       ├── kbDocumentService.ts          # CRUD for Documents
+│       ├── documentProcessor.ts          # Text extraction + chunking orchestration
+│       ├── uploadService.ts             # Source-agnostic upload pipeline
+│       ├── chunking/
+│       │   ├── types.ts                 # ChunkingStrategy interfaces
+│       │   ├── characterStrategy.ts     # Character chunker (800 char / 100 overlap)
+│       │   └── chunkingService.ts       # Facade for strategy resolution
+│       ├── parsers/
+│       │   ├── types.ts                 # DocumentParser interface
+│       │   ├── pdfParser.ts             # pdf-parse text extraction
+│       │   ├── docxParser.ts            # mammoth text extraction
+│       │   ├── textParser.ts            # native file reader for txt/md
+│       │   └── parserRegistry.ts        # Map of fileType → parser
+│       └── storage/
+│           ├── storageProvider.ts       # Storage abstraction interface
+│           ├── localStorageProvider.ts  # Node.js fs-based storage implementation
+│           └── index.ts                 # Storage singleton export
 │
 ├── instrumentation.ts                   # Next.js register() hook — starts WhatsApp on server boot
 │
@@ -396,6 +427,12 @@ src/
 │   │   ├── MessageBubble.tsx            # User + assistant message variants
 │   │   ├── ChatInput.tsx                # Auto-resize textarea + send button
 │   │   └── EmptyState.tsx               # Suggested prompts grid
+│   ├── knowledge/
+│   │   ├── KnowledgePanel.tsx           # Top-level workspace panel shell
+│   │   ├── KbListView.tsx               # Grid/list of all KBs
+│   │   ├── KbDetailView.tsx             # Detail dashboard (documents, progress, uploads)
+│   │   ├── UploadDropzone.tsx           # Drag and drop + file picker uploader
+│   │   └── DocumentStatusBadge.tsx      # Lifecycle badge (pending, processing, ready, error)
 │   ├── auth/
 │   │   └── LoginCard.tsx                # Login card with mock GitHub button
 │   └── shared/

@@ -13,3 +13,5 @@ export const useSidebarWidth = () => useStore((s) => s.sidebarWidth);
 export const useRepoPanelWidth = () => useStore((s) => s.repoPanelWidth);
 export const useCommandPaletteOpen = () => useStore((s) => s.commandPaletteOpen);
 export const useSetCommandPaletteOpen = () => useStore((s) => s.setCommandPaletteOpen);
+export const useActiveView = () => useStore((s) => s.activeView);
+export const useSetActiveView = () => useStore((s) => s.setActiveView);

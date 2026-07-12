@@ -51,3 +51,6 @@ next-env.d.ts
 # whatsapp-web.js sessions
 .wwebjs_auth/
 .wwebjs_cache/
+
+# knowledge base local file storage — uploaded files should not be committed
+/storage/

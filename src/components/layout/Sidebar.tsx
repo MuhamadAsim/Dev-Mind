@@ -5,6 +5,7 @@ import { motion, AnimatePresence, type HTMLMotionProps } from 'framer-motion';
 import { useTheme } from 'next-themes';
 import {
   MessageSquarePlus,
+  MessageSquare,
   Search,
   Pin,
   Trash2,
@@ -12,12 +13,13 @@ import {
   Bot,
   MoreHorizontal,
   Loader2,
+  Brain,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Logo } from '@/components/shared/Logo';
 import { UserAvatar } from '@/components/shared/UserAvatar';
-import { useIsSidebarOpen } from '@/store/hooks/useUI';
+import { useIsSidebarOpen, useActiveView, useSetActiveView } from '@/store/hooks/useUI';
 import {
   useConversations,
   useActiveConversationId,
@@ -87,6 +89,8 @@ export function Sidebar() {
   const pinConversationLocal = usePinConversation();
   const setConversations = useSetConversations();
   const setMessagesLoading = useSetMessagesLoading();
+  const activeView = useActiveView();
+  const setActiveView = useSetActiveView();
 
   // FIX (delete feedback): tracks ids currently being deleted so we can
   // show a spinner + block interaction instead of the UI looking frozen
@@ -331,6 +335,46 @@ export function Sidebar() {
                 )}
             </AnimatePresence>
           </ScrollArea>
+
+          {/* View Toggle (Chat vs Knowledge) */}
+          <div
+            className="flex items-center gap-1 px-2 py-1.5 shrink-0"
+            style={{ borderTop: `1px solid ${COLORS.border}` }}
+          >
+            <motion.button
+              type="button"
+              onClick={() => setActiveView('chat')}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg py-1.5 text-xs font-medium cursor-pointer transition-colors"
+              style={{
+                background: activeView === 'chat' ? COLORS.bgActive : 'transparent',
+                border: activeView === 'chat' ? `1px solid ${COLORS.accentBorder}` : '1px solid transparent',
+                color: activeView === 'chat' ? COLORS.accent : COLORS.textMuted,
+              }}
+              whileHover={{ background: activeView === 'chat' ? COLORS.bgActive : COLORS.bgHover }}
+              whileTap={{ scale: 0.98 }}
+              id="sidebar-chat-tab"
+            >
+              <MessageSquare size={13} />
+              <span>Chat</span>
+            </motion.button>
+
+            <motion.button
+              type="button"
+              onClick={() => setActiveView('knowledge')}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg py-1.5 text-xs font-medium cursor-pointer transition-colors"
+              style={{
+                background: activeView === 'knowledge' ? COLORS.bgActive : 'transparent',
+                border: activeView === 'knowledge' ? `1px solid ${COLORS.accentBorder}` : '1px solid transparent',
+                color: activeView === 'knowledge' ? COLORS.accent : COLORS.textMuted,
+              }}
+              whileHover={{ background: activeView === 'knowledge' ? COLORS.bgActive : COLORS.bgHover }}
+              whileTap={{ scale: 0.98 }}
+              id="sidebar-knowledge-tab"
+            >
+              <Brain size={13} />
+              <span>Knowledge</span>
+            </motion.button>
+          </div>
 
           {/* Bottom: User */}
           <div

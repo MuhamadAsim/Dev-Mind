@@ -1,0 +1,79 @@
+// ============================================================
+// DocumentChunk Model — one record per text chunk per document
+//
+// Minimal schema for Phase 8 (text + position metadata only).
+// Phase 9 will add: embedding vector, vectorIndex, metadata bag.
+//
+// knowledgeBaseId is denormalized here so we can query
+// "all chunks for a KB" without a join through KbDocument.
+// ============================================================
+import mongoose, { Schema, Document, Model } from 'mongoose';
+
+// ── TypeScript interface ──────────────────────────────────────
+
+export interface IDocumentChunk extends Document {
+  documentId: mongoose.Types.ObjectId;
+  /** Denormalized for fast KB-level queries (e.g. future vector search) */
+  knowledgeBaseId: mongoose.Types.ObjectId;
+  /** Zero-based index of this chunk within its parent document */
+  index: number;
+  /** The chunk text */
+  text: string;
+  /** Start character offset in the original extracted text */
+  charStart: number;
+  /** End character offset in the original extracted text */
+  charEnd: number;
+  createdAt: Date;
+}
+
+// ── Schema ────────────────────────────────────────────────────
+
+const DocumentChunkSchema = new Schema<IDocumentChunk>(
+  {
+    documentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'KbDocument',
+      required: true,
+      index: true,
+    },
+    knowledgeBaseId: {
+      type: Schema.Types.ObjectId,
+      ref: 'KnowledgeBase',
+      required: true,
+      index: true,
+    },
+    index: {
+      type: Number,
+      required: true,
+    },
+    text: {
+      type: String,
+      required: true,
+    },
+    charStart: {
+      type: Number,
+      required: true,
+    },
+    charEnd: {
+      type: Number,
+      required: true,
+    },
+  },
+  {
+    // Only createdAt — chunks are immutable once created
+    timestamps: { createdAt: true, updatedAt: false },
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// Compound index: fetch all chunks for a document in order
+DocumentChunkSchema.index({ documentId: 1, index: 1 });
+// KB-level index for future bulk vector operations
+DocumentChunkSchema.index({ knowledgeBaseId: 1 });
+
+// ── Model ─────────────────────────────────────────────────────
+
+export const DocumentChunkModel: Model<IDocumentChunk> =
+  mongoose.models.DocumentChunk ??
+  mongoose.model<IDocumentChunk>('DocumentChunk', DocumentChunkSchema);
