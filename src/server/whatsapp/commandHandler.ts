@@ -29,7 +29,9 @@ function getHelpText(): string {
 - \`/repos\` — List all connected repositories
 - \`/repo <name>\` — Switch the active repository for this session
 - \`/current\` — Show the active repository for this session
-- \`/help\` — Show this help menu`;
+- \`/help\` — Show this help menu
+
+Send a PDF, DOCX, TXT, or MD file directly to upload it to a Knowledge Base — I'll ask which one.`;
 }
 
 async function handleReposCommand(): Promise<string> {

@@ -5,6 +5,12 @@ export interface IWhatsappSession extends Document {
   conversationId: string | null;
   activeRepositoryId: string | null;
   preferredModel?: string | null;
+  pendingUpload: {
+    filename: string;
+    mimetype: string;
+    dataBase64: string;
+    uploadedAt: Date;
+  } | null;
   lastSeen: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +34,15 @@ const WhatsappSessionSchema = new Schema<IWhatsappSession>(
     },
     preferredModel: {
       type: String,
+      default: null,
+    },
+    pendingUpload: {
+      type: {
+        filename: String,
+        mimetype: String,
+        dataBase64: String,
+        uploadedAt: Date,
+      },
       default: null,
     },
     lastSeen: {

@@ -1,11 +1,20 @@
 declare module 'whatsapp-web.js' {
+  export interface MessageMedia {
+    mimetype: string;
+    data: string; // base64
+    filename?: string;
+    filesize?: number;
+  }
+
   export interface Message {
     from: string;
     to: string;
     author?: string;
     body: string;
     type: string;
+    hasMedia: boolean;
     reply(content: string): Promise<unknown>;
+    downloadMedia(): Promise<MessageMedia>;
   }
 
   export class LocalAuth {

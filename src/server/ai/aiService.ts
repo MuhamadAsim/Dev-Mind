@@ -70,6 +70,8 @@ const MAX_CONTEXT_MESSAGES = (() => {
   }
   return 20;
 })();
+console.log("MAX_CONTEXT_MESSAGES env:", process.env.MAX_CONTEXT_MESSAGES);
+console.log("MAX_CONTEXT_MESSAGES parsed:", MAX_CONTEXT_MESSAGES);
 
 export interface StreamChatOptions {
   /** The current user message to send to the LLM. */

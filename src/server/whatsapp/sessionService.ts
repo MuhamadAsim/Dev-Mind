@@ -43,3 +43,34 @@ export async function updateSessionRepository(
     { new: true }
   );
 }
+
+
+export interface PendingUpload {
+  filename: string;
+  mimetype: string;
+  dataBase64: string;
+  uploadedAt: Date;
+}
+
+export async function setPendingUpload(
+  phoneNumber: string,
+  pendingUpload: PendingUpload
+): Promise<IWhatsappSession | null> {
+  await connectDB();
+  return WhatsappSessionModel.findOneAndUpdate(
+    { phoneNumber },
+    { pendingUpload, lastSeen: new Date() },
+    { new: true }
+  );
+}
+
+export async function clearPendingUpload(
+  phoneNumber: string
+): Promise<IWhatsappSession | null> {
+  await connectDB();
+  return WhatsappSessionModel.findOneAndUpdate(
+    { phoneNumber },
+    { pendingUpload: null, lastSeen: new Date() },
+    { new: true }
+  );
+}
