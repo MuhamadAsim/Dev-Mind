@@ -1,5 +1,6 @@
 import type { ChatStreamPart, ChatSession } from '../ai/types';
 import type { MessageDTO } from '../db/messageService';
+import type { ResponseMode } from '../voice/types';
 
 // Open union: known client types get autocomplete/typo-safety, but the type
 // still accepts any string so a new client (Telegram, Slack, CLI, voice)
@@ -20,4 +21,6 @@ export interface StartChatTurnResult {
   stream: ReadableStream<ChatStreamPart>;
   finalize: (fullText: string) => Promise<MessageDTO>;
   session: ChatSession;
+  responseMode: ResponseMode;
 }
+

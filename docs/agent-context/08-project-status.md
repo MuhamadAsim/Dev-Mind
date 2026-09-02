@@ -77,6 +77,16 @@
 - [x] `verify-graph.ts` dev verification script (capability discovery + graceful offline handling confirmed)
 - [x] Build passes clean (TypeScript strict mode)
 
+### Phase 11 — WhatsApp Voice Responses (Uplift AI TTS)
+- [x] Integrated Uplift AI REST API (`POST https://api.upliftai.org/v1/synthesis/text-to-speech`)
+- [x] Dedicated `src/server/voice/` module (`voiceService.ts`, `responseMode.ts`, `textSanitizer.ts`, `providers/uplift.ts`)
+- [x] Pure intent router determining delivery mode (`text` | `voice` | `both`)
+- [x] KB informational queries automatically routed to WhatsApp audio notes
+- [x] Action / mutation commands, file uploads, and coding queries default to text
+- [x] Explicit voice requests ("Send this as voice") override all topics including code
+- [x] Fail-safe fallback to text if Uplift API errors or times out
+- [x] Automated test suite with 56 test cases (`src/server/voice/__tests__/voice.test.ts`)
+
 ---
 
 ## Planned Features (Remaining)
@@ -86,12 +96,13 @@
 - [ ] Command palette (⌘K) — quick nav, search, actions
 - [ ] Model selector in TopBar (functional, not UI-only)
 - [ ] LangGraph agent integration
-- [ ] RAG — file parsing, chunking, embeddings, vector DB, semantic search
+- [x] RAG — file parsing, chunking, embeddings, vector DB, semantic search
 - [x] MCP (Model Context Protocol) — Graphify context engine integrated via official SDK
 - [ ] MCP (Model Context Protocol) — filesystem, GitHub, terminal, browser tools (future)
 - [ ] Multi-agent system (Engineer, Reviewer, Debugger, Docs, Tests, Security)
 - [ ] File attachments
-- [ ] Voice input
+- [x] WhatsApp Voice Output (Uplift AI TTS)
+- [ ] Voice input (STT)
 - [ ] Mobile sidebar drawer
 - [ ] Settings page
 

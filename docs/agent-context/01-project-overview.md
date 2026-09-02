@@ -33,6 +33,7 @@
 | WhatsApp | `whatsapp-web.js` | latest | WhatsApp Web client via Puppeteer — server-only |
 | QR Renderer | `qrcode-terminal` | latest | Renders QR code to terminal for first-time auth |
 | MCP Client | `@modelcontextprotocol/sdk` | latest | Official SSE/Streamable-HTTP client for Graphify |
+| Voice & TTS | Uplift AI Text-to-Speech | REST API | `street-vendor` voice, MP3 audio notes for KB queries |
 
 ---
 

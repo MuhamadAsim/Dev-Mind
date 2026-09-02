@@ -152,6 +152,11 @@ WHATSAPP_ALLOWED_NUMBERS=
 # Maximum WhatsApp message length before chunking (default: 3500)
 # WhatsApp has a ~4096 char limit per message
 WHATSAPP_MAX_MESSAGE_LENGTH=3500
+
+# Uplift AI Text-to-Speech (Phase 11 — Voice Responses)
+UPLIFT_API=sk_api_...                      # Uplift AI API Key (server-only)
+UPLIFT_MAX_TEXT_LENGTH=1000                # Optional: Max character length for TTS inputs
+UPLIFT_TIMEOUT_MS=15000                    # Optional: Request timeout in milliseconds
 ```
 
 ### 15. Context Orchestration Architecture (Phase 10)

@@ -49,7 +49,7 @@ Client calls finalize(fullContent):
 
 **`ClientType`** is an open union (`'web' | 'whatsapp' | (string & {})`) — adding a new client never requires editing `types.ts`.
 
-### 13. WhatsApp Integration Architecture (Phase 7)
+### 13. WhatsApp Integration Architecture (Phase 7 + Phase 11 Voice)
 
 ```
 WhatsApp Message (user phone)
@@ -68,10 +68,12 @@ messageHandler.handleIncomingMessage()
     │       /repos, /repo <name>, /current, /help
     └── AI Turn → acquireLock(phoneNumber) → ChatOrchestrator.startChatTurn()
             │
-            ├── Buffer full stream
-            ├── finalize() → save to DB
-            ├── formatForWhatsApp() → Markdown → WhatsApp markup
-            └── chunkMessage() → split at 3500 chars → reply in sequence
+            ├── Buffer full stream & finalize in DB
+            ├── responseMode Dispatch ('text' | 'voice' | 'both')
+            │       ├── 'text'  → formatForWhatsApp() → chunkMessage() → message.reply(chunk)
+            │       ├── 'voice' → synthesizeSpeech() → MessageMedia audio note ({ sendAudioAsVoice: true })
+            │       │             └─ on error/timeout ➔ fallback to text reply
+            │       └── 'both'  → send text reply + send voice note
 ```
 
 **Module summary** — `src/server/whatsapp/`:
@@ -80,7 +82,7 @@ messageHandler.handleIncomingMessage()
 |---|---|
 | `client.ts` | `getWhatsappClient()` singleton, `initializeWhatsapp()`. Auto-detects Chrome/Edge path. |
 | `startup.ts` | `initWhatsapp()` — thin error-resilient wrapper called from `instrumentation.ts` |
-| `messageHandler.ts` | Entry point for all incoming messages. Allowlist, lock queue, AI turn orchestration. |
+| `messageHandler.ts` | Entry point for all incoming messages. Allowlist, lock queue, AI turn orchestration, voice/text dispatch. |
 | `commandHandler.ts` | Handles `/repos`, `/repo <name>`, `/current`, `/help` slash commands |
 | `sessionService.ts` | `getOrCreateSession()`, `updateSessionConversation()`, `updateSessionRepository()` |
 | `formatting.ts` | `formatForWhatsApp()` (Markdown → WA markup), `chunkMessage()` (3500-char safe splitter) |

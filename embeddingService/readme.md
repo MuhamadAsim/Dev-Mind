@@ -50,16 +50,16 @@ pip install -r requirements.txt
 
 ## 🏃 Running the Service
 
-Start the FastAPI server on port `8001`:
-
-```bash
-uvicorn server:app --host 127.0.0.1 --port 8001
-```
-
-Or via python:
+Start the FastAPI server on port `8001` (recommended via `python -m` to avoid path issues with activated venvs):
 
 ```bash
 python -m uvicorn server:app --host 127.0.0.1 --port 8001
+```
+
+Or directly via `uvicorn`:
+
+```bash
+uvicorn server:app --host 127.0.0.1 --port 8001
 ```
 
 The service will automatically download the `BAAI/bge-small-en-v1.5` model weights on first run and cache them locally in `~/.cache/huggingface/hub`.

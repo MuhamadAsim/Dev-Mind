@@ -62,14 +62,28 @@ src/
 │       └── providers/
 │           ├── github.ts                # GitHubProvider — GitHub REST API
 │           └── local.ts                 # LocalProvider — local filesystem (Node.js fs)
+│   ├── voice/
+│   │   ├── types.ts                     # ResponseMode, VoiceProvider, VoiceOptions, VoiceResult
+│   │   ├── voiceService.ts              # synthesizeSpeech() — central coordinator with error fallback
+│   │   ├── responseMode.ts              # determineResponseMode() — pure intent & precedence router
+│   │   ├── textSanitizer.ts             # sanitizeForTTS() — strips Markdown/code for clean speech
+│   │   ├── providers/
+│   │   │   └── uplift.ts                # UpliftVoiceProvider — REST client for Uplift AI TTS
+│   │   └── __tests__/
+│   │       └── voice.test.ts            # Test suite (56 cases) for intent routing & fallback
+│   ├── orchestration/
+│   │   ├── types.ts                     # RouterInput, ProviderName, AssembledContext, IContextProvider
+│   │   ├── contextRouter.ts             # routeContext() — deterministic provider routing
+│   │   ├── contextBuilder.ts            # buildContext() — fan-out parallel provider executor
+│   │   └── providers/                   # conversationProvider, repositoryProvider, knowledgeProvider
 │   ├── whatsapp/
-│       ├── client.ts                    # getWhatsappClient() singleton + initializeWhatsapp()
-│       ├── startup.ts                   # initWhatsapp() — error-resilient boot wrapper
-│       ├── messageHandler.ts            # handleIncomingMessage() — allowlist, lock queue, AI turn
-│       ├── commandHandler.ts            # /repos, /repo, /current, /help slash commands
-│       ├── sessionService.ts            # getOrCreateSession, updateSessionConversation, updateSessionRepository
-│       ├── formatting.ts                # formatForWhatsApp(), chunkMessage()
-│       └── types.ts                     # WhatsApp-specific types
+│   │   ├── client.ts                    # getWhatsappClient() singleton + initializeWhatsapp()
+│   │   ├── startup.ts                   # initWhatsapp() — error-resilient boot wrapper
+│   │   ├── messageHandler.ts            # handleIncomingMessage() — allowlist, lock queue, AI turn, voice/text dispatch
+│   │   ├── commandHandler.ts            # /repos, /repo, /current, /help slash commands
+│   │   ├── sessionService.ts            # getOrCreateSession, updateSessionConversation, updateSessionRepository
+│   │   ├── formatting.ts                # formatForWhatsApp(), chunkMessage()
+│   │   └── types.ts                     # WhatsApp-specific types
 │   └── knowledge/
 │       ├── types.ts                     # DTOs, file types, constants
 │       ├── knowledgeBaseService.ts       # CRUD for KnowledgeBases

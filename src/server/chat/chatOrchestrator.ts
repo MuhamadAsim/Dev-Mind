@@ -9,6 +9,7 @@ import { writeRepositoryFile, createRepositoryDirectory } from '../repos/reposit
 import { streamChat } from '../ai/aiService';
 import { routeContext } from '../orchestration/contextRouter';
 import { buildContext } from '../orchestration/contextBuilder';
+import { determineResponseMode } from '../voice/voiceService';
 import type { RouterInput } from '../orchestration/types';
 import type { ChatSessionContext, StartChatTurnResult } from './types';
 import type { ChatStreamPart, ChatSession } from '../ai/types';
@@ -135,6 +136,7 @@ export async function startChatTurn(
         stream: createPlainStream(resultText),
         session,
         finalize,
+        responseMode: 'text',
       };
     }
 
@@ -171,6 +173,7 @@ export async function startChatTurn(
         stream: createPlainStream(cancelText),
         session,
         finalize,
+        responseMode: 'text',
       };
     }
   }
@@ -186,6 +189,14 @@ export async function startChatTurn(
 
   const selectedProviders = await routeContext(routerInput);
   const assembledContext = await buildContext(selectedProviders, routerInput);
+
+  // Determine response mode (text, voice, or both)
+  const responseMode = determineResponseMode({
+    userMessage: trimmedMessage,
+    activeRepositoryId,
+    selectedProviders,
+    hasKnowledgeContext: assembledContext.providers.includes('knowledge'),
+  });
 
   const assistantMsgRecord = await addMessage(conversationId, 'assistant', 'Thinking...', {
     status: 'sending',
@@ -225,5 +236,7 @@ export async function startChatTurn(
     stream,
     session,
     finalize,
+    responseMode,
   };
 }
+

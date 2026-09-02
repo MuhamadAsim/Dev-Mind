@@ -76,3 +76,13 @@ User → API Route → AI Service → AI Provider → OpenRouter/OpenAI-compatib
 - **To add a new provider**: Create `src/server/ai/providers/<name>.ts`, add a `case` in `aiService.ts`, set `ACTIVE_AI_PROVIDER` env var.
 - The Vercel AI SDK `useChat` hook is **intentionally not used** — Zustand manages all state.
 
+### 8. Voice & Text-to-Speech (TTS) Architecture
+```
+ChatOrchestrator (Turn Result) → VoiceService → Response Mode Router → UpliftVoiceProvider → WhatsApp MessageMedia Voice Note
+```
+- **`src/server/voice/voiceService.ts`**: High-level synthesis coordinator with automatic error fallback to text.
+- **`src/server/voice/responseMode.ts`**: Pure intent resolver determining delivery mode (`text`, `voice`, `both`).
+- **`src/server/voice/textSanitizer.ts`**: Pre-TTS Markdown/code cleaner and sentence-boundary truncator.
+- **`src/server/voice/providers/uplift.ts`**: Uplift AI REST integration with timeout protection and secure logging.
+
+

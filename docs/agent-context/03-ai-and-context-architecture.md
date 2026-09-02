@@ -59,3 +59,26 @@ Context Service
 3. Only read file contents via `readFile` once relevant locations are identified.
 4. Fall back to `searchFiles` / `listDirectory` if Graphify is unavailable or not indexed.
 
+---
+
+### 16. Response Mode Decision & Routing (Phase 11)
+
+Coordinates with the Context Orchestration layer to determine the appropriate delivery channel (`text`, `voice`, or `both`) for each turn.
+
+```
+User Message + Context Signals
+            │
+            ▼
+Response Mode Intent Router (determineResponseMode)
+            │
+            ├── 1. Explicit Both ("text and voice", "voice too")        → 'both'
+            ├── 2. Explicit Voice ("send as voice", "reply with voice")  → 'voice' (overrides code/actions)
+            ├── 3. Mutations / Actions / Uploads ("Delete doc", "Fix code") → 'text'
+            ├── 4. Knowledge Base Informational / Retrieval ("What is in doc?") → 'voice'
+            └── 5. Technical Topics / Default                            → 'text'
+```
+
+- **Clean Decoupling**: Voice synthesis is performed on the **final AI answer**, never on raw retrieval chunks or system tokens.
+- **Fail-Safe Fallback**: If speech synthesis fails, times out, or the API key is unconfigured, WhatsApp automatically falls back to delivering formatted text.
+
+

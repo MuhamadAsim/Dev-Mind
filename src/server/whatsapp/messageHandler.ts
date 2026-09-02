@@ -13,6 +13,11 @@ import { formatForWhatsApp, chunkMessage } from './formatting';
 import { processUpload } from '../knowledge/uploadService';
 import { listKnowledgeBases } from '../knowledge/knowledgeBaseService';
 import { SUPPORTED_MIME_TYPES } from '../knowledge/types';
+import { synthesizeSpeech } from '../voice/voiceService';
+import { convertToOpusVoiceNote, saveAudioFile } from '../voice/audioConverter';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { MessageMedia } = require('whatsapp-web.js');
 
 // Parse allowed numbers from environment variables
 const allowedRaw = process.env.WHATSAPP_ALLOWED_NUMBERS || '';
@@ -201,7 +206,10 @@ export async function handleIncomingMessage(message: Message): Promise<void> {
         stream,
         session: chatSession,
         finalize,
+        responseMode,
       } = await startChatTurn(context, message.body);
+
+      console.log(`[WhatsApp] Turn response mode determined as: "${responseMode}" for ${phoneNumber}`);
 
       if (!session.conversationId) {
         session.conversationId = resolvedConvId;
@@ -240,22 +248,85 @@ export async function handleIncomingMessage(message: Message): Promise<void> {
       const maxMsgLen = process.env.WHATSAPP_MAX_MESSAGE_LENGTH
         ? parseInt(process.env.WHATSAPP_MAX_MESSAGE_LENGTH, 10)
         : 3500;
-      console.log("Reply length:", replyText.length);
-      console.log("Reply text:");
-      console.log(replyText);
-      const replyChunks = chunkMessage(replyText, maxMsgLen);
-      console.log("Chunks:", replyChunks.length);
 
-      replyChunks.forEach((c, i) => {
-        console.log(`Chunk ${i}: (${c.length} chars)`);
-        console.log(c);
-      });
+      const sendTextMessage = async () => {
+        const replyChunks = chunkMessage(replyText, maxMsgLen);
+        for (const chunk of replyChunks) {
+          await message.reply(chunk);
+        }
+      };
 
-      for (const chunk of replyChunks) {
-        await message.reply(chunk);
+      const sendVoiceMessage = async (): Promise<boolean> => {
+        try {
+          const voiceResult = await synthesizeSpeech(fullContent);
+          if (!voiceResult) {
+            return false;
+          }
+
+          // Save raw synthesized audio (MP3) locally for debugging / inspection
+          await saveAudioFile(voiceResult.audioBuffer, `uplift_${phoneNumber}`, 'mp3');
+
+          // Convert to OGG/Opus for WhatsApp native voice note (waveform player)
+          const opusResult = await convertToOpusVoiceNote(voiceResult.audioBuffer);
+
+          if (opusResult) {
+            // Save converted Opus voice note locally
+            await saveAudioFile(opusResult.audioBuffer, `whatsapp_voice_${phoneNumber}`, 'ogg');
+
+            const media = new MessageMedia(
+              opusResult.mimeType,
+              opusResult.audioBuffer.toString('base64'),
+              'voice.ogg'
+            );
+
+            await (message as any).reply(media, undefined, { sendAudioAsVoice: true });
+            console.log(`[WhatsApp] Native voice note (OGG/Opus) delivered successfully to ${phoneNumber}`);
+          } else {
+            // Fallback: Send standard MP3 as regular audio attachment (sendAudioAsVoice: false)
+            console.log(
+              `[WhatsApp] Sending regular audio message (MP3) to ${phoneNumber} (FFmpeg conversion unavailable)...`
+            );
+            const media = new MessageMedia(
+              voiceResult.mimeType || 'audio/mpeg',
+              voiceResult.audioBuffer.toString('base64'),
+              'voice.mp3'
+            );
+
+            await (message as any).reply(media);
+            console.log(`[WhatsApp] Audio message delivered successfully to ${phoneNumber}`);
+          }
+
+          return true;
+        } catch (voiceErr: any) {
+          console.error(
+            `[WhatsApp] Error delivering voice note to ${phoneNumber}:`,
+            voiceErr?.message || voiceErr
+          );
+          return false;
+        }
+      };
+
+      // ── Dispatch response based on responseMode ───────────────
+      if (responseMode === 'both') {
+        // Send text first, then voice
+        await sendTextMessage();
+        const voiceSent = await sendVoiceMessage();
+        if (!voiceSent) {
+          console.warn(`[WhatsApp] Both mode: voice delivery failed for ${phoneNumber}, but text was delivered.`);
+        }
+      } else if (responseMode === 'voice') {
+        // Try voice note first; if synthesis or sending fails, fall back to text
+        const voiceSent = await sendVoiceMessage();
+        if (!voiceSent) {
+          console.log(`[WhatsApp] Voice synthesis/delivery failed for ${phoneNumber}. Falling back to text response.`);
+          await sendTextMessage();
+        }
+      } else {
+        // Default text response
+        await sendTextMessage();
       }
 
-      console.log(`[WhatsApp] AI Response sent successfully to ${phoneNumber}`);
+      console.log(`[WhatsApp] AI Response processing completed successfully for ${phoneNumber}`);
     } catch (err: any) {
       console.error(`[WhatsApp] Error in AI turn execution for ${phoneNumber}:`, err);
       await message.reply(
