@@ -71,14 +71,18 @@ User Message + Context Signals
             ▼
 Response Mode Intent Router (determineResponseMode)
             │
-            ├── 1. Explicit Both ("text and voice", "voice too")        → 'both'
-            ├── 2. Explicit Voice ("send as voice", "reply with voice")  → 'voice' (overrides code/actions)
-            ├── 3. Mutations / Actions / Uploads ("Delete doc", "Fix code") → 'text'
-            ├── 4. Knowledge Base Informational / Retrieval ("What is in doc?") → 'voice'
-            └── 5. Technical Topics / Default                            → 'text'
+            ├── 1. Explicit Both ("text and voice", "voice too")                     → 'both'
+            ├── 2. Explicit Voice ("send as voice", "reply with voice")               → 'voice' (overrides code/actions)
+            ├── 3. Explicit Text ("in text", "as text", "text only")                 → 'text' (overrides KB voice default)
+            ├── 4. Actions / Mutations / File CRUD ("Delete doc", "List files")       → 'text' (English)
+            ├── 5. Knowledge Base Content Queries ("Tell me about X", "What is in X") → 'voice' (Urdu voice note)
+            └── 6. Technical Topics / Default                                         → 'text' (English)
 ```
 
 - **Clean Decoupling**: Voice synthesis is performed on the **final AI answer**, never on raw retrieval chunks or system tokens.
-- **Fail-Safe Fallback**: If speech synthesis fails, times out, or the API key is unconfigured, WhatsApp automatically falls back to delivering formatted text.
+- **Urdu Voice Generation**: When voice mode is active, the LLM is instructed to generate conversational responses in natural Urdu (اردو) for natural synthesis by Uplift AI.
+- **Zero Disclaimers**: System instructions strictly prohibit the LLM from stating that it cannot produce audio or that it is a text-only model.
+- **Native Voice Note Delivery**: Synthesized MP3 buffers from Uplift AI are transcoded to OGG/Opus (`audio/ogg; codecs=opus`) for native WhatsApp waveform playback, and saved locally to `data/audio_logs/` for inspection.
+- **Fail-Safe Fallback**: If speech synthesis fails, times out, or FFmpeg conversion is unavailable, WhatsApp automatically falls back to delivering formatted text or regular audio.
 
 

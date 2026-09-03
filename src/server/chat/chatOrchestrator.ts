@@ -191,11 +191,17 @@ export async function startChatTurn(
   const assembledContext = await buildContext(selectedProviders, routerInput);
 
   // Determine response mode (text, voice, or both)
+  const conversationHasKnowledge = (assembledContext.conversationMessages ?? []).some(m =>
+    typeof m.content === 'string' &&
+    /\b(knowledge\s*base|kb|document|pdf|cv|resume|muhammad_asim|asim)\b/i.test(m.content)
+  );
+
   const responseMode = determineResponseMode({
     userMessage: trimmedMessage,
     activeRepositoryId,
     selectedProviders,
-    hasKnowledgeContext: assembledContext.providers.includes('knowledge'),
+    hasKnowledgeContext: assembledContext.providers.includes('knowledge') || conversationHasKnowledge,
+    conversationHasKnowledge,
   });
 
   const assistantMsgRecord = await addMessage(conversationId, 'assistant', 'Thinking...', {
@@ -207,6 +213,7 @@ export async function startChatTurn(
     model,
     activeRepoId: activeRepositoryId,
     assembledContext,
+    responseMode,
   });
 
   const finalize = async (fullText: string) => {

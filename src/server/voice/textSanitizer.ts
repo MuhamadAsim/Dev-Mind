@@ -60,7 +60,11 @@ export function sanitizeForTTS(text: string, options: SanitizeOptions = {}): str
     const lastPunctuation = Math.max(
       truncated.lastIndexOf('. '),
       truncated.lastIndexOf('? '),
-      truncated.lastIndexOf('! ')
+      truncated.lastIndexOf('! '),
+      truncated.lastIndexOf('۔ '),
+      truncated.lastIndexOf('۔'),
+      truncated.lastIndexOf('؟ '),
+      truncated.lastIndexOf('؟')
     );
 
     if (lastPunctuation > maxLen * 0.5) {

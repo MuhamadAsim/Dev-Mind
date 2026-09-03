@@ -8,7 +8,9 @@ import {
   determineResponseMode,
   detectExplicitVoiceIntent,
   detectExplicitBothIntent,
+  detectExplicitTextIntent,
   detectActionOrMutationIntent,
+  detectFileCrudIntent,
   detectKnowledgeInformationalIntent,
 } from '../responseMode';
 import { sanitizeForTTS } from '../textSanitizer';
@@ -44,12 +46,10 @@ async function runTests() {
   console.log('🧪 Running Voice Response & Intent Routing Tests');
   console.log('======================================================\n');
 
-  console.log('--- 1. Knowledge Base Informational Queries (Expected: VOICE) ---');
+  console.log('--- 1. Knowledge Base Informational & File Queries (Expected: VOICE) ---');
 
   const kbVoiceQueries = [
     'What does my knowledge base contain?',
-    'What files are in my knowledge base?',
-    'What documents do I have?',
     'Do I have anything about authentication?',
     'Is Docker mentioned in my files?',
     'Is authentication mentioned in my files?',
@@ -61,10 +61,25 @@ async function runTests() {
     'What does requirements.pdf say about authentication?',
     'What is in requirements.pdf?',
     'Tell me what you found in this file.',
+    'Summarize this knowledgebase',
+    'Summarize muhammad_asim',
+    'Give me summary of muhammad_asim',
+    'What is in muhammad_asim?',
+    'Tell me about muhammad_asim and about skill from knowledge base.',
+    'Tell me about muhammad_asim from knowledge base',
+    'What skills are mentioned in the CV?',
+    'Can you tell me adress only',
+    'Can you tell me address only',
+    'What is his phone number?',
+    'Tell me his email',
+    'And education',
+    'Now tell me the adress',
+    'his qualification',
+    'And his GPA',
   ];
 
   for (const q of kbVoiceQueries) {
-    test(`KB Info: "${q}" -> voice`, () => {
+    test(`KB Content Info: "${q}" -> voice`, () => {
       const mode = determineResponseMode({ userMessage: q });
       assert.strictEqual(
         mode,
@@ -82,9 +97,65 @@ async function runTests() {
     assert.strictEqual(mode, 'voice');
   });
 
-  console.log('\n--- 2. Actions / Mutations / Uploads (Expected: TEXT) ---');
+  test('KB Info follow-up with conversationHasKnowledge=true: "Can you tell me adress only" -> voice', () => {
+    const mode = determineResponseMode({
+      userMessage: 'Can you tell me adress only',
+      conversationHasKnowledge: true,
+    });
+    assert.strictEqual(mode, 'voice');
+  });
 
-  const actionTextQueries = [
+  test('KB Info follow-up with conversationHasKnowledge=true: "And education" -> voice', () => {
+    const mode = determineResponseMode({
+      userMessage: 'And education',
+      conversationHasKnowledge: true,
+    });
+    assert.strictEqual(mode, 'voice');
+  });
+
+  test('KB Info follow-up with conversationHasKnowledge=true but explicit text requested -> text', () => {
+    const mode = determineResponseMode({
+      userMessage: 'And education in text',
+      conversationHasKnowledge: true,
+    });
+    assert.strictEqual(mode, 'text');
+  });
+
+  console.log('\n--- 2. Explicit TEXT Requests Overriding KB Voice Default (Expected: TEXT) ---');
+
+  const explicitTextQueries = [
+    'Summarize muhammad_asim in text',
+    'What files are in my knowledge base as text',
+    'List the knowledge base in text',
+    'Show documents in University in text only',
+    'What does requirements.pdf say, reply in text',
+    'Summarize this document in text',
+    'Give me summary of muhammad_asim as text',
+    'Tell me what is in muhammad_asim without voice',
+    'Summarize this file in writing',
+    'What documents do I have in text format',
+  ];
+
+  for (const q of explicitTextQueries) {
+    test(`Explicit text overrides KB voice: "${q}" -> text`, () => {
+      const mode = determineResponseMode({ userMessage: q });
+      assert.strictEqual(
+        mode,
+        'text',
+        `Expected "text" for "${q}", but got "${mode}"`
+      );
+    });
+  }
+
+  console.log('\n--- 3. File and Knowledge Base CRUD Operations (Expected: TEXT) ---');
+
+  const fileCrudQueries = [
+    'List the knowledge base',
+    'List my knowledge bases',
+    'Show documents in University',
+    'What files are in my knowledge base?',
+    'What documents do I have?',
+    'What files do I have?',
     'Upload this PDF.',
     'Upload this PDF to my knowledge base.',
     'Upload requirements.pdf',
@@ -101,8 +172,8 @@ async function runTests() {
     'Move this document.',
   ];
 
-  for (const q of actionTextQueries) {
-    test(`Action: "${q}" -> text`, () => {
+  for (const q of fileCrudQueries) {
+    test(`File CRUD: "${q}" -> text`, () => {
       const mode = determineResponseMode({ userMessage: q });
       assert.strictEqual(
         mode,
@@ -112,7 +183,7 @@ async function runTests() {
     });
   }
 
-  console.log('\n--- 3. Coding Queries without Voice (Expected: TEXT) ---');
+  console.log('\n--- 4. Coding Queries without Voice (Expected: TEXT) ---');
 
   const codeTextQueries = [
     'Fix this code.',
@@ -234,6 +305,14 @@ For more details, visit [Docs](https://example.com).
     const sanitized = sanitizeForTTS(longText, { maxTextLength: 60 });
     assert(sanitized.length <= 60, `Length ${sanitized.length} must be <= 60`);
     assert(sanitized.endsWith('.'), 'Should truncate at sentence boundary if possible');
+  });
+
+  test('Truncates cleanly at Urdu sentence boundary (۔) when exceeding maxTextLength', () => {
+    const longUrduText =
+      'پہلا جملہ مختصر اور جامع ہے۔ دوسرا جملہ بنیادی معلومات فراہم کرتا ہے۔ تیسرا جملہ اضافی تفصیلات بیان کرتا ہے جو طوالت کی وجہ سے کٹ سکتی ہیں۔';
+    const sanitized = sanitizeForTTS(longUrduText, { maxTextLength: 45 });
+    assert(sanitized.length <= 45, `Length ${sanitized.length} must be <= 45`);
+    assert(sanitized.endsWith('۔'), 'Should truncate at Urdu sentence boundary (۔)');
   });
 
   console.log('\n--- 8. Voice Service Fallback & Provider Handling ---');

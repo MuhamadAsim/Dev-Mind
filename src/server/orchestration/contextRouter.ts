@@ -89,7 +89,15 @@ function detectConversationReferenceIntent(message: string): boolean {
  * Used as a gate for opportunistic knowledge routing.
  */
 function isInformationSeeking(message: string): boolean {
-  const matched = /\b(what is|what are|explain|describe|tell me about|how does|why does|what happens|define|what do you know about)\b/i.test(message);
+  const patterns = [
+    /\b(what is|what are|explain|describe|tell me about|how does|why does|what happens|define|what do you know about)\b/i,
+    /\b(what|who|where|when|why|how|which)\b/i,
+    /\b(can\s+you\s+)?(tell|give|show|provide|share|explain|describe|define)\s+(me|us)?\b/i,
+    /\b(do|does|did|is|are|can|could|would)\s+(you|he|she|it|they|there)\b/i,
+    /\b(add?ress|contact|email|phone|number|location|city|skills?|experience|education|project|summary|details|info|information|qualification)\b/i,
+    /\b(tell\s+me|about)\b/i,
+  ];
+  const matched = patterns.some(p => p.test(message));
   console.log(`[contextRouter DEBUG] isInformationSeeking: ${matched} for message "${message}"`);
   return matched;
 }

@@ -28,4 +28,5 @@ export interface ResponseModeInput {
   activeRepositoryId?: string | null;
   selectedProviders?: string[];
   hasKnowledgeContext?: boolean;
+  conversationHasKnowledge?: boolean;
 }

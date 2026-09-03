@@ -7,6 +7,7 @@
 // ============================================================
 import type { AIMessage, AIProvider, ChatSession, ChatStreamPart } from './types';
 import type { AssembledContext } from '../orchestration/types';
+import type { ResponseMode } from '../voice/types';
 import { createOpenRouterProvider } from './providers/openrouter';
 
 const SYSTEM_PROMPT = `You are DevMind AI, a personal AI software engineering assistant.
@@ -14,6 +15,15 @@ You help developers write, understand, debug, review, and improve code.
 You are precise, concise, and technically accurate.
 When writing code, always use proper syntax highlighting with fenced code blocks.
 When you are unsure, say so rather than guessing.
+
+Language Guidelines:
+- Urdu (اردو) is EXCLUSIVELY used when Voice Delivery Mode is active (for voice synthesis) or when the user specifically writes their message in Urdu script.
+- For ALL standard TEXT responses, you MUST ALWAYS respond in clear, professional ENGLISH.
+- NEVER reply in Urdu for text responses to questions asked in English, even if previous messages in the conversation were in Urdu.
+
+Voice and Audio Output Rules:
+- DevMind AI has an integrated text-to-speech voice pipeline (powered by Uplift AI).
+- NEVER say "I cannot provide voice output", "I am a text-based AI", "I cannot speak", or make disclaimers about voice or audio capabilities. Audio synthesis is handled automatically by the system.
 
 Repository access and context rules:
 - If the user asks about "the repo", "my project", or repository-specific content
@@ -85,6 +95,8 @@ export interface StreamChatOptions {
    * When omitted, only the user message is sent with no prior context.
    */
   assembledContext?: AssembledContext;
+  /** Response delivery mode ('text' | 'voice' | 'both') */
+  responseMode?: ResponseMode;
 }
 
 export interface StreamChatResult {
@@ -108,11 +120,18 @@ export function truncateConversationContext(
 }
 
 export async function streamChat(options: StreamChatOptions): Promise<StreamChatResult> {
-  const { userMessage, model = DEFAULT_MODEL, activeRepoId = null, assembledContext } = options;
+  const {
+    userMessage,
+    model = DEFAULT_MODEL,
+    activeRepoId = null,
+    assembledContext,
+    responseMode = 'text',
+  } = options;
 
   console.log(`\n=================== AI SERVICE START ===================`);
   console.log(`[aiService DEBUG] userMessage: "${userMessage}"`);
   console.log(`[aiService DEBUG] activeRepoId: ${activeRepoId}`);
+  console.log(`[aiService DEBUG] responseMode: ${responseMode}`);
   console.log(`[aiService DEBUG] assembledContext details:`);
   console.log(`  - Providers: [${assembledContext?.providers.join(', ') ?? ''}]`);
   console.log(`  - Has systemContextBlock: ${!!assembledContext?.systemContextBlock}`);
@@ -132,9 +151,60 @@ export async function streamChat(options: StreamChatOptions): Promise<StreamChat
     console.log(`  - Message #${idx}: role=${m.role}, length=${m.content.length}, preview="${m.content.slice(0, 80).replace(/\r?\n/g, ' ')}..."`);
   });
 
+  // Instruction blocks for voice delivery vs text delivery turns
+  const isVoiceMode = responseMode === 'voice' || responseMode === 'both';
+
+  const voiceTopBanner = isVoiceMode
+    ? [
+        '================================================================================',
+        '🚨 MANDATORY VOICE DELIVERY DIRECTIVE — YOU MUST RESPOND IN URDU (اردو) 🚨',
+        '================================================================================',
+        '1. LANGUAGE REQUIREMENT: Your response will be synthesized directly into spoken audio via the Uplift AI Urdu voice synthesizer. Therefore, you MUST write your entire response in fluent, natural Urdu script (اردو رسم الخط).',
+        '2. ABSOLUTELY NO ENGLISH EXPLANATIONS: Do NOT output English sentences, paragraphs, or bullet points. Even if the user asked their question in English, and even if retrieved documents, knowledge base data, or tool outputs are in English, translate the facts and explain them directly in natural Urdu (اردو).',
+        '3. ZERO DISCLAIMERS: You are speaking directly to the user through the Uplift voice synthesizer. NEVER say "I cannot provide voice output", "I am a text model", "I cannot speak", or "I will provide text instead". Start answering immediately in conversational Urdu.',
+        '4. SPOKEN CONVERSATIONAL STYLE: Speak conversationally and directly as if talking to the user. Avoid markdown tables, bulleted lists, code blocks, or raw URLs that sound awkward when read aloud. Use proper Urdu punctuation (۔ and ؟).',
+        '5. IGNORE PRIOR TURN LANGUAGE: Even if previous assistant turns were in English, you MUST follow this directive for this turn and speak in Urdu only.',
+        '================================================================================',
+        '',
+      ].join('\r\n')
+    : '';
+
+  const voiceBottomReminder = isVoiceMode
+    ? [
+        '',
+        '---',
+        '[CRITICAL INSTRUCTION - VOICE DELIVERY MODE ACTIVE]',
+        'Remember: Voice mode is active for Uplift AI synthesis. Deliver your COMPLETE answer in fluent, conversational Urdu script (اردو). ZERO disclaimers. NO English explanations. NO markdown tables or bulleted lists.',
+        '---',
+      ].join('\r\n')
+    : '';
+
+  const textTopBanner = !isVoiceMode
+    ? [
+        '================================================================================',
+        '💬 MANDATORY TEXT DELIVERY DIRECTIVE — YOU MUST RESPOND IN ENGLISH 💬',
+        '================================================================================',
+        '1. LANGUAGE REQUIREMENT: This turn is delivered as standard TEXT (not voice). You MUST write your complete response in clear, concise ENGLISH.',
+        '2. ABSOLUTELY NO URDU IN TEXT MODE: Do NOT reply in Urdu for this turn. Urdu is EXCLUSIVELY reserved for voice output turns. Even if previous assistant turns in this conversation were in Urdu (from voice notes), you MUST switch back and respond in ENGLISH.',
+        '3. EXCEPTION: Only reply in Urdu if the user explicitly typed their current message in Urdu script (e.g. اردو رسم الخط میں). If the prompt was written in English or Latin script (e.g. "And education", "Now tell me the address"), your reply MUST be in ENGLISH.',
+        '================================================================================',
+        '',
+      ].join('\r\n')
+    : '';
+
+  const textBottomReminder = !isVoiceMode
+    ? [
+        '',
+        '---',
+        '[CRITICAL INSTRUCTION - TEXT RESPONSE MODE ACTIVE]',
+        'Remember: This turn is delivered as TEXT. Write your response in clear ENGLISH. Do NOT reply in Urdu unless the user wrote their prompt in Urdu script.',
+        '---',
+      ].join('\r\n')
+    : '';
+
   // Prepend the system context block (repository + knowledge context) to the
   // system prompt when the orchestration layer has retrieved relevant context.
-  const instructions =
+  const baseInstructions =
     assembledContext?.systemContextBlock
       ? [
         'The following context was automatically retrieved to help you answer the request.',
@@ -147,6 +217,10 @@ export async function streamChat(options: StreamChatOptions): Promise<StreamChat
         SYSTEM_PROMPT,
       ].join('\r\n')
       : SYSTEM_PROMPT;
+
+  const instructions = isVoiceMode
+    ? `${voiceTopBanner}${baseInstructions}${voiceBottomReminder}`
+    : `${textTopBanner}${baseInstructions}${textBottomReminder}`;
 
   console.log(`[aiService DEBUG] Final instructions (system prompt) (length=${instructions.length}):`);
   console.log(`\n---------------- INSTRUCTIONS START ----------------`);

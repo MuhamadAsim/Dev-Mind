@@ -54,3 +54,6 @@ next-env.d.ts
 
 # knowledge base local file storage — uploaded files should not be committed
 /storage/
+
+# local audio logs for inspection
+data/audio_logs/
