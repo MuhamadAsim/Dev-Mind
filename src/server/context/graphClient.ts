@@ -3,6 +3,7 @@
 // ============================================================
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { traceable } from 'langsmith/traceable';
 
 export interface McpToolResult {
   content: Array<{ type: string; text?: string }>;
@@ -57,16 +58,25 @@ export class McpGraphClient {
     return this.client!.listTools();
   }
 
+  // Private traced helper — keeps `traceable` out of the public signature
+  // while ensuring every Graphify MCP call appears in LangSmith.
+  private _callToolTraced = traceable(
+    async (name: string, args: Record<string, unknown>): Promise<McpToolResult> => {
+      if (!this.client) {
+        await this.connect();
+      }
+      const result = await this.client!.callTool({
+        name,
+        arguments: args,
+      });
+      // The SDK types content as {} for flexibility; we narrow it here
+      return result as unknown as McpToolResult;
+    },
+    { name: 'graphify-mcp-call', run_type: 'tool' }
+  );
+
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    if (!this.client) {
-      await this.connect();
-    }
-    const result = await this.client!.callTool({
-      name,
-      arguments: args,
-    });
-    // The SDK types content as {} for flexibility; we narrow it here
-    return result as unknown as McpToolResult;
+    return this._callToolTraced(name, args);
   }
 
   async close(): Promise<void> {

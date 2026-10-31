@@ -76,6 +76,27 @@ User → API Route → AI Service → AI Provider → OpenRouter/OpenAI-compatib
 - **To add a new provider**: Create `src/server/ai/providers/<name>.ts`, add a `case` in `aiService.ts`, set `ACTIVE_AI_PROVIDER` env var.
 - The Vercel AI SDK `useChat` hook is **intentionally not used** — Zustand manages all state.
 
+
+### 7a. Observability (LangSmith)
+All AI SDK calls, Graphify MCP tool calls, and Knowledge Base retrieval operations are traced via LangSmith when `LANGSMITH_TRACING=true`.
+
+**What is traced:**
+| Component | Traced function | Span name | Run type |
+|---|---|---|---|
+| `streamText` (AI SDK) | `src/server/ai/tracing.ts` via `wrapAISDK` | auto (streamText) | `llm` |
+| Graphify MCP | `McpGraphClient.callTool` | `graphify-mcp-call` | `tool` |
+| KB Retrieval | `retrieve()` in `retrievalService.ts` | `kb-retrieve` | `retriever` |
+
+**Where the wrapper lives:** `src/server/ai/tracing.ts` - every file that needs `streamText` imports the traced version from here instead of from `'ai'`.
+
+**Environment variables** (set in `.env.local`):
+| Variable | Purpose |
+|---|---|
+| `LANGSMITH_TRACING` | `true` to enable, `false` or unset to disable (no-op) |
+| `LANGSMITH_API_KEY` | Your LangSmith API key (`lsv2_pt_...`) |
+| `LANGSMITH_PROJECT` | Project name in LangSmith (default: `devmind-dev`) |
+| `LANGSMITH_HIDE_INPUTS` | `true` to redact inputs from traces |
+| `LANGSMITH_HIDE_OUTPUTS` | `true` to redact outputs from traces |
 ### 8. Voice & Text-to-Speech (TTS) Architecture
 ```
 ChatOrchestrator (Turn Result) → VoiceService → Response Mode Router → UpliftVoiceProvider → WhatsApp MessageMedia Voice Note

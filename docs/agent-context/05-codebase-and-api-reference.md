@@ -34,6 +34,7 @@ src/
 │   ├── ai/
 │   │   ├── types.ts                     # AIMessage, AIProvider, AIProviderConfig interfaces
 │   │   ├── aiService.ts                 # streamChat() — single AI entry-point
+│   │   ├── tracing.ts                   # LangSmith tracing wrapper (wrapAISDK)
 │   │   └── providers/
 │   │       └── openrouter.ts            # OpenRouter provider (add more providers here)
 │   ├── db/

@@ -2,7 +2,8 @@
 // OpenRouter Provider
 // ============================================================
 import { createOpenAI } from '@ai-sdk/openai';
-import { streamText, isStepCount } from 'ai';
+import { isStepCount } from 'ai';
+import { streamText } from '../tracing';
 import type { AIMessage, AIProvider, AIProviderConfig, ChatSession, ChatStreamPart } from '../types';
 import { createRepositoryTools, createContextTools, createKnowledgeTools } from '../tools';
 
